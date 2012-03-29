@@ -1,0 +1,28 @@
+<h1>Kbs</h1>
+<table class="table table-striped">
+  <thead>
+    <tr>
+      <th>ID</th>
+      <th>Tags</th>
+      <th>Title</th>
+      <th>Content</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    <% @kbs.each do |kb| %>
+      <tr>
+        <td><%= link_to kb.id, kb_path(kb) %></td>
+        <td><%= kb.tags %></td>
+        <td><%= kb.title %></td>
+        <td><%= raw kb.content[0..255].gsub(/\n/,'<br />') %>...</td>
+        <td>
+          <%= link_to 'Edit', edit_kb_path(kb), :class => 'btn btn-mini' %>
+          <%= link_to 'Destroy', kb_path(kb), :method => :delete, :confirm => 'Are you sure?', :class => 'btn btn-mini btn-danger' %>
+        </td>
+      </tr>
+    <% end %>
+  </tbody>
+</table>
+
+<%= link_to 'New', new_kb_path, :class => 'btn btn-primary' %>

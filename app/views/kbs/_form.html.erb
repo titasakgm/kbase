@@ -1,0 +1,16 @@
+<%= simple_form_for @kb, :html => { :class => 'form-horizontal' } do |f| %>
+  <fieldset>
+    <legend><%= controller.action_name.capitalize %> /Kb</legend>
+
+    <%= f.input :tags %>
+    <%= f.input :title, :width => '600px;' %>
+    <%= f.input :content, 
+                :as => :text, 
+                :input_html => {:rows => 5, :style => "width:600px"} %>
+
+    <div class="form-actions">
+      <%= f.submit nil, :class => 'btn btn-primary' %>
+      <%= link_to 'Cancel', kbs_path, :class => 'btn' %>
+    </div>
+  </fieldset>
+<% end %>

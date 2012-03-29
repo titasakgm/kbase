@@ -1,0 +1,2 @@
+module KbsHelper
+end

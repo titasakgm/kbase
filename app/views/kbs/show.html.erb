@@ -1,0 +1,22 @@
+<h1>/Kb</h1>
+
+<p>
+  <b>Tags</b><br>
+  <%= @kb.tags %>
+</p>
+
+<p>
+  <b>Title</b><br>
+  <%= @kb.title %>
+</p>
+
+<p>
+  <b>Content</b><br>
+  <%= @kb.content %>
+</p>
+
+<div class="form-actions">
+  <%= link_to 'Back', kbs_path, :class => 'btn'  %>
+  <%= link_to 'Edit', edit_kb_path(@kb), :class => 'btn' %>
+  <%= link_to 'Delete', kb_path(@kb), :method => 'delete', :confirm => 'Are you sure?', :class => 'btn btn-danger' %>
+</div>
