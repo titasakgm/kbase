@@ -1,0 +1,533 @@
+
+--- 
+kbs: 
+  columns: 
+  - id
+  - tags
+  - title
+  - content
+  - created_at
+  - updated_at
+  records: 
+  - - 1
+    - putty,theme
+    - solarized-dark.reg
+    - |-
+      Windows Registry Editor Version 5.00
+      
+      [HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\Solarized%20Dark]
+      "Colour0"="131,148,150"
+      "Colour1"="147,161,161"
+      "Colour2"="0,43,54"
+      "Colour3"="7,54,66"
+      "Colour4"="0,43,54"
+      "Colour5"="238,232,213"
+      "Colour6"="7,54,66"
+      "Colour7"="0,43,56"
+      "Colour8"="220,50,47"
+      "Colour9"="203,75,22"
+      "Colour10"="133,153,0"
+      "Colour11"="88,110,117"
+      "Colour12"="181,137,0"
+      "Colour13"="101,123,131"
+      "Colour14"="38,139,210"
+      "Colour15"="131,148,150"
+      "Colour16"="211,54,130"
+      "Colour17"="108,113,196"
+      "Colour18"="42,161,152"
+      "Colour19"="147,161,161"
+      "Colour20"="238,232,213"
+      "Colour21"="253,246,227"
+    - 2012-03-29 04:42:36.855780
+    - 2012-03-29 05:07:49.286211
+  - - 2
+    - putty,theme
+    - solarized-light.reg
+    - |
+      Windows Registry Editor Version 5.00
+      
+      [HKEY_CURRENT_USER\Software\SimonTatham\PuTTY\Sessions\Solarized%20Light]
+      "Colour0"="101,123,131"
+      "Colour1"="88,110,117"
+      "Colour2"="253,246,227"
+      "Colour3"="238,232,213"
+      "Colour4"="238,232,213"
+      "Colour5"="101,123,131"
+      "Colour6"="7,54,66"
+      "Colour7"="0,43,54"
+      "Colour8"="220,50,47"
+      "Colour9"="203,75,22"
+      "Colour10"="133,153,0"
+      "Colour11"="88,110,117"
+      "Colour12"="181,137,0"
+      "Colour13"="101,123,131"
+      "Colour14"="38,139,210"
+      "Colour15"="131,148,150"
+      "Colour16"="211,54,130"
+      "Colour17"="108,113,196"
+      "Colour18"="42,161,152"
+      "Colour19"="147,161,161"
+      "Colour20"="238,232,213"
+      "Colour21"="253,246,227"
+
+    - 2012-03-29 05:07:08.342842
+    - 2012-03-29 05:07:08.342842
+  - - 3
+    - ruby,stock
+    - get-quote.rb
+    - |-
+      #! C:\Ruby193\bin\ruby.exe
+      
+      require 'net/http'
+      
+      def save(stock,date,time)
+        dat = stock.join(',')
+        dat = "#{date},#{time},#{dat}\n"
+        puts dat
+      end
+      
+      w = Net::HTTP.new("marketdata.set.or.th")
+      req = "/mkt/sectorquotation.do?market=A&industry=0"
+      req += "&sector=95&language=en&country=TH"
+      resp, data = w.get(req)
+      
+      data = resp.body
+      d = data.split(/\n/)
+      puts "data.length: #{data.length}"
+      puts "d.size: #{d.size}"
+      
+      t = Time.now
+      yy = t.year
+      mm = sprintf("%02d", t.mon)
+      dd = sprintf("%02d", t.day)
+      hr = sprintf("%02d", t.hour)
+      mn = sprintf("%02d", t.min)
+      
+      date = "#{yy}#{mm}#{dd}"
+      time = "#{hr}:#{mn}"
+      
+      start = false
+      count = 0
+      stock = []
+      
+      d.each do |l|
+        l = l.chomp.gsub(/<.*?>/,'').strip
+        l = l.tr(',','')
+        next if l.length < 1
+      	if l =~ /ADVANC/
+      		start = true
+      	end
+      	if start && l =~ /nbsp/
+      		stock[-1] = stock[-1].to_i * 1000 # Values
+      		save(stock,date,time)
+      		break
+      	end
+      	if start
+      		if l =~ /^[A-Z]/
+      			if count == 0
+      				stock = [l]
+      			elsif ['ATO','ATC'].include?(l)
+      				stock << l
+      			elsif count == 1 # ignore XD XM ...
+      				count = 2
+      				next
+      			else
+      				stock[-1] = stock[-1].to_i * 1000 # Values
+      				save(stock,date,time)
+      				count = 0
+      				stock = [l]
+      				next
+      			end
+      		else
+      			stock << l
+      		end
+      		count += 1
+      	end
+      end
+    - 2012-03-29 08:51:44.854446
+    - 2012-03-29 08:51:44.854446
+  - - 4
+    - ruby,oneclick,1.9.3
+    - Ruby Installer 1.9.3
+    - http://files.rubyforge.vm.bytemark.co.uk/rubyinstaller/rubyinstaller-1.9.3-p125.exe
+    - 2012-03-29 08:53:53.593910
+    - 2012-03-29 08:53:53.593910
+  - - 5
+    - ruby,editor,scite
+    - SciTE Ruby Editor
+    - http://cdnetworks-kr-2.dl.sourceforge.net/project/scintilla/SciTE/3.0.4/wscite304.zip
+    - 2012-03-29 08:54:59.391129
+    - 2012-03-29 08:54:59.391129
+  - - 6
+    - ruby,mongo
+    - mongo driver for ruby
+    - |-
+      C:\> gem  install  mongo
+      
+      http://api.mongodb.org/ruby/1.6.1/
+    - 2012-03-29 10:07:56.122281
+    - 2012-03-29 10:07:56.122281
+  - - 7
+    - ruby,devkit
+    - Ruby Development Tools Kit
+    - |
+      Download
+      https://github.com/downloads/oneclick/rubyinstaller/DevKit-tdm-32-4.5.2-20111229-1559-sfx.exe
+      
+      Installation
+      https://github.com/oneclick/rubyinstaller/wiki/development-kit
+      
+      1 Unzip to C:\DevKit
+      2 cd \DevKit
+      3 ruby dk.rb init -> config.yml
+      4 Edit config.yml --> Select Ruby193
+      5 ruby dk.rb install
+      6 gem install bson_ext --platform=ruby
+      
+
+    - 2012-03-29 10:28:35.833941
+    - 2012-03-29 12:07:32.915312
+  - - 8
+    - ruby,mongo
+    - get-quote-mongo-test.rb
+    - |-
+      #! C:\Ruby193\bin\ruby.exe
+      
+      require 'rubygems'
+      require 'net/http'
+      require 'mongo'
+      
+      def save(stock,date,time)
+      	@conn = Mongo::Connection.new("192.168.1.40")
+      	@db   = @conn['set50']
+      	@coll = @db['quotes']
+      	
+      	doc = {
+      		'date' => date,
+      		'time' => time,
+      		'symbol' => stock[0],
+      		'open' => stock[1].to_f,
+      		'high' => stock[2].to_f,
+      		'low' => stock[3].to_f,
+      		'close' => stock[4].to_f,
+      		'change' => stock[5].to_f,
+      		'perc_change' => stock[6].to_f,
+      		'bid' => stock[7].to_f,
+      		'offer' => stock[8].to_f,
+      		'volume' => stock[9].to_i,
+      		'value' => stock[10].to_i
+      	}
+      	puts "doc: #{doc}"
+      	@coll.insert(doc)
+      	@conn.close
+      end
+      
+      t1 = Time.now
+      
+      w = Net::HTTP.new("marketdata.set.or.th")
+      req = "/mkt/sectorquotation.do?market=A&industry=0"
+      req += "&sector=95&language=en&country=TH"
+      resp, data = w.get(req)
+      
+      data = resp.body
+      d = data.split(/\n/)
+      puts "data.length: #{data.length}"
+      puts "d.size: #{d.size}"
+      
+      t = Time.now
+      yy = t.year
+      mm = sprintf("%02d", t.mon)
+      dd = sprintf("%02d", t.day)
+      hr = sprintf("%02d", t.hour)
+      mn = sprintf("%02d", t.min)
+      
+      date = "#{yy}#{mm}#{dd}"
+      time = "#{hr}:#{mn}"
+      
+      start = false
+      count = 0
+      stock = []
+      
+      d.each do |l|
+        l = l.chomp.gsub(/<.*?>/,'').strip
+        l = l.tr(',','')
+        next if l.length < 1
+      	if l =~ /ADVANC/
+      		start = true
+      	end
+      	if start && l =~ /nbsp/
+      		stock[-1] = stock[-1].to_i * 1000 # Values
+      		save(stock,date,time)
+      		break
+      	end
+      	if start
+      		if l =~ /^[A-Z]/
+      			if count == 0
+      				stock = [l]
+      				count = 1
+      				next
+      			elsif ['ATO','ATC'].include?(l)
+      				stock << l
+      			elsif count == 1 # ignore XD XM ...
+      				count = 2
+      				next
+      			else
+      				stock[-1] = stock[-1].to_i * 1000 # Values
+      				save(stock,date,time)
+      				count = 0
+      				stock = [l]
+      				next
+      			end
+      		else
+      			stock << l
+      		end
+      		count += 1
+      	end
+      end
+      
+      t2 = Time.now
+      puts "Processing time: #{t2-t1} seconds"
+    - 2012-03-29 11:05:26.868003
+    - 2012-03-29 11:05:26.868003
+  - - 9
+    - ruby,mongo
+    - get-quote-mongo.rb
+    - |-
+      #! C:\Ruby193\bin\ruby.exe
+      
+      require 'rubygems'
+      require 'net/http'
+      require 'mongo'
+      
+      def save(stock,date,time)
+      	@conn = Mongo::Connection.new("192.168.1.40")
+      	@db   = @conn['set50']
+      	@coll = @db['quotes']
+      	
+      	doc = {
+      		'date' => date,
+      		'time' => time,
+      		'symbol' => stock[0],
+      		'open' => stock[1].to_f,
+      		'high' => stock[2].to_f,
+      		'low' => stock[3].to_f,
+      		'close' => stock[4].to_f,
+      		'change' => stock[5].to_f,
+      		'perc_change' => stock[6].to_f,
+      		'bid' => stock[7].to_f,
+      		'offer' => stock[8].to_f,
+      		'volume' => stock[9].to_i,
+      		'value' => stock[10].to_i
+      	}
+      	@coll.insert(doc)
+      	@conn.close
+      end
+      
+      w = Net::HTTP.new("marketdata.set.or.th")
+      req = "/mkt/sectorquotation.do?market=A&industry=0"
+      req += "&sector=95&language=en&country=TH"
+      resp, data = w.get(req)
+      
+      data = resp.body
+      d = data.split(/\n/)
+      
+      t = Time.now
+      yy = t.year
+      mm = sprintf("%02d", t.mon)
+      dd = sprintf("%02d", t.day)
+      hr = sprintf("%02d", t.hour)
+      mn = sprintf("%02d", t.min)
+      
+      date = "#{yy}#{mm}#{dd}"
+      time = "#{hr}:#{mn}"
+      
+      start = false
+      count = 0
+      stock = []
+      
+      d.each do |l|
+        l = l.chomp.gsub(/<.*?>/,'').strip
+        l = l.tr(',','')
+        next if l.length < 1
+      	if l =~ /ADVANC/
+      		start = true
+      	end
+      	if start && l =~ /nbsp/
+      		stock[-1] = stock[-1].to_i * 1000 # Values
+      		save(stock,date,time)
+      		break
+      	end
+      	if start
+      		if l =~ /^[A-Z]/
+      			if count == 0
+      				stock = [l]
+      				count = 1
+      				next
+      			elsif ['ATO','ATC'].include?(l)
+      				stock << l
+      			elsif count == 1 # ignore XD XM ...
+      				count = 2
+      				next
+      			else
+      				stock[-1] = stock[-1].to_i * 1000 # Values
+      				save(stock,date,time)
+      				count = 0
+      				stock = [l]
+      				next
+      			end
+      		else
+      			stock << l
+      		end
+      		count += 1
+      	end
+      end
+    - 2012-03-29 11:06:08.790665
+    - 2012-03-29 11:45:36.371662
+  - - 10
+    - windows,cron
+    - Crontab for Windows
+    - |-
+      nncronlite
+      http://www.nncron.ru/download/nncron191.exe
+      
+      Install
+      o Run nncron191.exe
+      o Create C:\Program Files\nnCron\nnCron.tab
+      o Create shortcut for Start nnCron and Stop nnCron
+      o Create D:\SET\get-quote-mongo.rb
+    - 2012-03-29 11:10:16.326976
+    - 2012-03-29 11:55:23.575656
+  - - 11
+    - windows,cron
+    - C:\Program Files\nnCron\nnCron.tab
+    - |-
+      #CRONTAB FILE 
+      # Classic crontab format:
+      # Minutes Hours Days Months WeekDays Years Command
+      
+      * 10-11 * * 1-5 * D:\SET\get-quote.bat
+      0-30 12,16 * * 1-5 * D:\SET\get-quote.bat
+      30-59 14 * * 1-5 * D:\SET\get-quote.bat
+      * 15 * * 1-5 * D:\SET\get-quote.bat
+      50 16 * * 1-5 * D:\SET\get-quote.bat
+      
+      7-10 19 * * 1-5 * D:\SET\get-quote.bat
+    - 2012-03-29 11:55:51.767883
+    - 2012-03-29 11:55:51.767883
+  - - 12
+    - linux,httpd
+    - Cannot start httpd on FC16-32bit
+    - "\xE0\xB9\x80\xE0\xB8\x81\xE0\xB8\xB4\xE0\xB8\x94\xE0\xB8\x88\xE0\xB8\xB2\xE0\xB8\x81 mod_perl.so \xE0\xB8\x88\xE0\xB8\xA3\xE0\xB8\xB4\xE0\xB8\x87\xE0\xB9\x86\r\n\
+      \r\n\
+      Seeing as mod_perl is apparently causing a segfault I'd be looking at that more\r\n\
+      \r\n\
+      https://bugzilla.redhat.com/show_bug.cgi?id=730832\r\n\
+      \r\n\
+      \xE0\xB8\xAA\xE0\xB8\xB2\xE0\xB9\x80\xE0\xB8\xAB\xE0\xB8\x95\xE0\xB8\xB8\xE0\xB8\x97\xE0\xB8\xB5\xE0\xB9\x88 httpd start \xE0\xB9\x84\xE0\xB8\xA1\xE0\xB9\x88\xE0\xB9\x84\xE0\xB8\x94\xE0\xB9\x89\xE0\xB9\x83\xE0\xB8\x99 FC16 32 bit \xE0\xB9\x80\xE0\xB8\x9E\xE0\xB8\xA3\xE0\xB8\xB2\xE0\xB8\xB0 mod_perl \xE0\xB8\x81\xE0\xB8\xB1\xE0\xB8\x9A httpd \xE0\xB9\x80\xE0\xB8\x82\xE0\xB9\x89\xE0\xB8\xB2\xE0\xB9\x83\xE0\xB8\x88\xE0\xB9\x84\xE0\xB8\xA1\xE0\xB9\x88\xE0\xB8\x95\xE0\xB8\xA3\xE0\xB8\x87\xE0\xB8\x81\xE0\xB8\xB1\xE0\xB8\x99\xE0\xB8\x9A\xE0\xB8\xB2\xE0\xB8\x87\xE0\xB8\xAD\xE0\xB8\xA2\xE0\xB9\x88\xE0\xB8\xB2\xE0\xB8\x87 \xE0\xB8\xA1\xE0\xB8\xB5 patch \xE0\xB8\xAA\xE0\xB8\xB3\xE0\xB8\xAB\xE0\xB8\xA3\xE0\xB8\xB1\xE0\xB8\x9A\xE0\xB9\x81\xE0\xB8\x81\xE0\xB9\x89\xE0\xB9\x84\xE0\xB8\x82 mod_perl \xE0\xB9\x83\xE0\xB8\xAB\xE0\xB9\x89\xE0\xB9\x81\xE0\xB8\xA5\xE0\xB9\x89\xE0\xB8\xA7\r\n\
+      \r\n\
+      Download mod_perl-2.0.5-7.fc16 \xE0\xB8\x88\xE0\xB8\xB2\xE0\xB8\x81\r\n\
+      URL: http://koji.fedoraproject.org/koji/buildinfo?buildID=273329\r\n\
+      \r\n\
+      i686\t (build logs)\r\n\
+      mod_perl-2.0.5-6.fc16.i686.rpm (info) (download)\r\n\
+      mod_perl-devel-2.0.5-6.fc16.i686.rpm (info) (download)\r\n\
+      mod_perl-debuginfo-2.0.5-6.fc16.i686.rpm (info) (download)\r\n\
+      \r\n\
+      Uninstall 3 packages\r\n\
+      # rpm  -e  mod_perl  --nodeps\r\n\
+      # rpm  -e  mod_perl-devel  --nodeps\r\n\
+      # rpm  -e  mod_perl-debuginfo  --nodeps\r\n\
+      \r\n\
+      Install 3 packages\r\n\
+      # rpm  -ivh  mod_perl-*\r\n\
+      \r\n\
+      # systemctl  start  httpd.service\r\n\
+      \r\n\
+      \xE0\xB8\x99\xE0\xB9\x88\xE0\xB8\xB2\xE0\xB8\x88\xE0\xB8\xB0\xE0\xB9\x81\xE0\xB8\x81\xE0\xB9\x89\xE0\xB9\x84\xE0\xB8\x94\xE0\xB9\x89\xE0\xB8\x95\xE0\xB8\xA3\xE0\xB8\x87\xE0\xB8\x88\xE0\xB8\xB8\xE0\xB8\x94"
+    - 2012-03-30 05:49:00.689809
+    - 2012-03-30 15:45:20.902386
+  - - 13
+    - FC16,ipv6
+    - Remove IPv6 from FC16
+    - |-
+      ... this is how I do it (Fedora 16):
+      
+      # sysctl -w net.ipv6.conf.all.disable_ipv6=1
+      
+      and
+      
+      # echo "net.ipv6.conf.all.disable_ipv6=1" >> /etc/sysctl.conf
+    - 2012-03-30 17:00:55.688714
+    - 2012-03-31 00:19:24.193991
+  - - 14
+    - FC16,desktop,icon
+    - Add Desktop Icons
+    - |
+      Install package gnome-tweak-tool
+      
+      # yum  -y  install  gnome-tweak-tool
+      
+      [Application] > [Accessories] > [Advanced Settings...] > [Desktop] ...
+
+    - 2012-03-30 17:10:23.510287
+    - 2012-03-30 17:10:23.510287
+  - - 15
+    - FC16,bashrc
+    - Change prompt via .bashrc
+    - |-
+      # .bashrc
+      
+      # Source global definitions
+      if [ -f /etc/bashrc ]; then
+              . /etc/bashrc
+      fi
+      
+      # User specific aliases and functions
+      alias nano='nano -w'
+      alias mkdir='mkdir -p'
+      alias h='history'
+      alias ..='cd ..'
+      alias path='echo -e ${PATH//:/\\n}'
+      alias libpath='echo -e ${LD_LIBRARY_PATH//:/\\n}'
+      alias du='du -kh'
+      alias df='df -kTh'
+      alias tree='tree -Csu'
+      
+      CHANGE eth0 TO YOUR ACTUAL INTERFACE NAME
+      MY_IP=$(/sbin/ifconfig eth0 | awk '/inet/ { print $2 } ' | sed -e s/addr://)
+      
+      case $(id -u) in
+          0)
+              STARTCOLOUR='\[\e[31m\]';
+              ENDCOLOR="\[\e[0m\]"
+              PS1="$STARTCOLOUR$MY_IP:\u\n[\w]# $ENDCOLOR";
+              ;;
+          *)
+              STARTCOLOUR='\[\e[33m\]';
+              ENDCOLOR="\[\e[0m\]"
+              PS1="$STARTCOLOUR$MY_IP:\u\n[\w]$ $ENDCOLOR";
+              ;;
+      esac
+    - 2012-03-30 17:21:09.067107
+    - 2012-03-31 00:21:26.168951
+  - - 16
+    - firebug
+    - FireBug Tips and Tricks
+    - http://www.seifi.org/javascript/firebug_tips_and_tricks.html
+    - 2012-03-31 00:15:27.188473
+    - 2012-03-31 00:15:27.188473
+  - - 17
+    - FC16,selinux
+    - Disable SELinux
+    - |-
+      Current session
+      # setenforce  0
+      
+      Next reboot
+      # nano  /etc/selinux/config
+      .....
+      SELINUX=disabled
+      
+      # reboot
+    - 2012-03-31 00:46:28.839647
+    - 2012-03-31 00:46:28.839647

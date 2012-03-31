@@ -18,3 +18,5 @@ gem 'simple_form'
 gem 'kaminari'
 gem 'mongrel'
 gem 'therubyracer', '~> 0.9.10'
+gem 'yaml_db'
+
