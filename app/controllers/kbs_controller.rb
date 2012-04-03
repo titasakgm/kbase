@@ -1,4 +1,6 @@
 class KbsController < ApplicationController
+  before_filter :authenticate
+
   # GET /kbs
   # GET /kbs.json
   def index

@@ -1,4 +1,4 @@
-<h1>Kbs</h1>
+<h1>Notes</h1>
 
 <%= paginate @kbs %>
 <p>
@@ -9,7 +9,9 @@
       <th>Tags</th>
       <th>Title</th>
       <th>Content</th>
-      <th>Actions</th>
+      <% if is_admin? %>
+        <th>Actions</th>
+      <% end %>
     </tr>
   </thead>
   <tbody>
@@ -19,12 +21,16 @@
         <td><%= kb.tags %></td>
         <td><%= kb.title %></td>
         <td><%= raw kb.content[0..100].gsub(/\n/,'<br />') %>...</td>
-        <td>
-          <%= link_to 'Edit', edit_kb_path(kb), :class => 'btn btn-mini' %>
-        </td>
+        <% if is_admin? %>
+          <td>
+            <%= link_to 'Edit', edit_kb_path(kb), :class => 'btn btn-mini' %>
+          </td>
+        <% end %>
       </tr>
     <% end %>
   </tbody>
 </table>
 
-<%= link_to 'New', new_kb_path, :class => 'btn btn-primary' %>
+<% if is_admin? %>
+  <%= link_to 'New', new_kb_path, :class => 'btn btn-primary' %>
+<% end %>

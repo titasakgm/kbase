@@ -1,4 +1,4 @@
-<h1>/Kb</h1>
+<h1>/Note</h1>
 
 <p>
   <b>Tags</b><br>
@@ -12,11 +12,13 @@
 
 <p>
   <b>Content</b><br>
-  <%= @kb.content %>
+  <%= raw @kb.content.gsub(/\n/,'<br />') %>
 </p>
 
 <div class="form-actions">
   <%= link_to 'Back', kbs_path, :class => 'btn'  %>
-  <%= link_to 'Edit', edit_kb_path(@kb), :class => 'btn' %>
-  <%= link_to 'Delete', kb_path(@kb), :method => 'delete', :confirm => 'Are you sure?', :class => 'btn btn-danger' %>
+  <% if is_admin? %>
+    <%= link_to 'Edit', edit_kb_path(@kb), :class => 'btn' %>
+    <%= link_to 'Delete', kb_path(@kb), :method => 'delete', :confirm => 'Are you sure?', :class => 'btn btn-danger' %>
+  <% end %>
 </div>
