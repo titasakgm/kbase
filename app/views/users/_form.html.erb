@@ -8,6 +8,8 @@
                   :as => :select,
                   :collection => ['member','admin']
       %>
+    <% else %>
+      <%= f.input :role, :as => :hidden, :input_html => {:value => 'member'} %>
     <% end %>
     <%= f.input :password %>
     <%= f.input :password_confirmation %>
