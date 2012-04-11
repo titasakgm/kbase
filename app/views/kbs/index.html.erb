@@ -18,8 +18,8 @@
     <% @kbs.each do |kb| %>
       <tr>
         <td><%= link_to kb.id, kb_path(kb) %></td>
-        <td><%= kb.tags %></td>
-        <td><%= kb.title %></td>
+        <td><%= link_to kb.tags, kb_path(kb) %></td>
+        <td><%= link_to kb.title, kb_path(kb) %></td>
         <td><%= raw kb.content[0..100].gsub(/\n/,'<br />') %>...</td>
         <% if is_admin? %>
           <td>
