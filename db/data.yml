@@ -198,25 +198,44 @@ kbs:
       require 'mongo'
       
       def save(stock,date,time)
-      	@conn = Mongo::Connection.new("192.168.1.40")
+      	@conn = Mongo::Connection.new("127.0.0.1")
       	@db   = @conn['set50']
       	@coll = @db['quotes']
+      
+      	symbol = stock[0].to_s.gsub(/bodytext-b/,'')
+      	return if symbol =~ /^0/ or symbol == 'Last'
       	
-      	doc = {
-      		'date' => date,
-      		'time' => time,
-      		'symbol' => stock[0],
-      		'open' => stock[1].to_f,
-      		'high' => stock[2].to_f,
-      		'low' => stock[3].to_f,
-      		'close' => stock[4].to_f,
-      		'change' => stock[5].to_f,
-      		'perc_change' => stock[6].to_f,
-      		'bid' => stock[7].to_f,
-      		'offer' => stock[8].to_f,
-      		'volume' => stock[9].to_i,
-      		'value' => stock[10].to_i
-      	}
+      	if symbol =~ /^SET/ or symbol =~ /mai/
+      		doc = {
+      			'date' => date,
+      			'time' => time,
+      			'symbol' => symbol,
+      			'close' => stock[1].to_f,
+      			'change' => stock[2].to_f,
+      			'perc_change' => stock[3].to_f,
+      			'high' => stock[4].to_f,
+      			'low' => stock[5].to_f,
+      			'volume' => stock[6].to_i * 1000,
+      			'value' => (stock[7].to_f * 1000).to_i
+      		}
+      	else
+      		doc = {
+      			'date' => date,
+      			'time' => time,
+      			'symbol' => stock[0],
+      			'open' => stock[1].to_f,
+      			'high' => stock[2].to_f,
+      			'low' => stock[3].to_f,
+      			'close' => stock[4].to_f,
+      			'change' => stock[5].to_f,
+      			'perc_change' => stock[6].to_f,
+      			'bid' => stock[7].to_f,
+      			'offer' => stock[8].to_f,
+      			'volume' => stock[9].to_i,
+      			'value' => stock[10].to_i
+      		}
+      	end
+      	
       	puts "doc: #{doc}"
       	@coll.insert(doc)
       	@conn.close
@@ -230,6 +249,12 @@ kbs:
       resp, data = w.get(req)
       
       data = resp.body
+      
+      #prepare for SET INDEX
+      # /remark/ when start == false -> ignore
+      # /remakr/ when start == true -> start = false
+      data = data.gsub(/bodytext-b/,'>bodytext-b<')
+      data = data.gsub(/remark/,'>remark<')
       d = data.split(/\n/)
       puts "data.length: #{data.length}"
       puts "d.size: #{d.size}"
@@ -252,16 +277,23 @@ kbs:
         l = l.chomp.gsub(/<.*?>/,'').strip
         l = l.tr(',','')
         next if l.length < 1
+      	if  l =~ /bodytext-b/
+      		start = true
+      	end
+      	if start and l =~ /remark/
+      		start = false
+      	end
       	if l =~ /ADVANC/
       		start = true
       	end
       	if start && l =~ /nbsp/
-      		stock[-1] = stock[-1].to_i * 1000 # Values
+      		stock[-1] = stock[-1].to_f * 1000 # Values
       		save(stock,date,time)
       		break
       	end
       	if start
-      		if l =~ /^[A-Z]/
+      		if l =~ /^[A-Z]/ or l =~ /bodytext-b/
+                              next if l =~ /^X/
       			if count == 0
       				stock = [l]
       				count = 1
@@ -272,7 +304,7 @@ kbs:
       				count = 2
       				next
       			else
-      				stock[-1] = stock[-1].to_i * 1000 # Values
+      				stock[-1] = stock[-1].to_f * 1000 # Values
       				save(stock,date,time)
       				count = 0
       				stock = [l]
@@ -288,7 +320,7 @@ kbs:
       t2 = Time.now
       puts "Processing time: #{t2-t1} seconds"
     - 2012-03-29 11:05:26.868003
-    - 2012-03-29 11:05:26.868003
+    - 2012-04-05 07:40:43.804898
   - - 9
     - ruby,mongo
     - get-quote-mongo.rb
@@ -299,28 +331,94 @@ kbs:
       require 'net/http'
       require 'mongo'
       
-      def save(stock,date,time)
-      	@conn = Mongo::Connection.new("192.168.1.40")
-      	@db   = @conn['set50']
-      	@coll = @db['quotes']
+      def get_last_vol(con,date,time,sym)
+        db   = con['stock']
+        coll = db['quotes']
       	
-      	doc = {
-      		'date' => date,
-      		'time' => time,
-      		'symbol' => stock[0],
-      		'open' => stock[1].to_f,
-      		'high' => stock[2].to_f,
-      		'low' => stock[3].to_f,
-      		'close' => stock[4].to_f,
-      		'change' => stock[5].to_f,
-      		'perc_change' => stock[6].to_f,
-      		'bid' => stock[7].to_f,
-      		'offer' => stock[8].to_f,
-      		'volume' => stock[9].to_i,
-      		'value' => stock[10].to_i
-      	}
-      	@coll.insert(doc)
-      	@conn.close
+      	last_vol = 0
+        tms = coll.distinct('time',{'date' => date,'symbol' => sym}).sort()
+        if tms.length > 0 # NOT 10:00
+          i = tms.index(time)
+      		if i == 0 # 10:00 Not likely
+      			old_vol = 0
+      		else
+      			last_time = i.nil? ? tms.last : tms[i-1]
+            info = coll.find({'date' => date, 'symbol' => sym, 'time' => last_time})
+            info.each do |doc|
+      	      last_vol = doc['volume']
+      	    end
+      		end
+      	end
+      	last_vol
+      end
+      
+      def save(con,stock,date,time,close_vol, perc_volume)
+      	db   = con['stock']
+      	coll = db['quotes']
+      	sym = stock[0]
+      	tms = coll.find({'date' => date,'symbol' => sym}).sort([time,-1]).limit(1)
+      	symbol = stock[0]
+      	
+      	return if symbol =~ /^0/ or symbol == 'Last'
+      	
+      	if symbol =~ /^SET/ or symbol =~ /mai/
+      		volume = stock[6].to_i * 1000
+      		vol_diff = 0
+      		doc = {
+      			'date' => date,
+      			'time' => time,
+      			'symbol' => symbol,
+      			'close' => stock[1].to_f,
+      			'change' => stock[2].to_f,
+      			'perc_change' => stock[3].to_f,
+      			'high' => stock[4].to_f,
+      			'low' => stock[5].to_f,
+      			'volume' => stock[6].to_i * 1000,
+      			'value' => (stock[7].to_f * 1000).to_i
+      		}
+      	else
+        	last_volume = get_last_vol(con,date,time,sym)
+      		volume = stock[9].to_i
+      		vol_diff = volume - last_volume
+      		doc = {
+      			'date' => date,
+      			'time' => time,
+      			'symbol' => stock[0],
+      			'open' => stock[1].to_f,
+      			'high' => stock[2].to_f,
+      			'low' => stock[3].to_f,
+      			'close' => stock[4].to_f,
+      			'change' => stock[5].to_f,
+      			'perc_change' => stock[6].to_f,
+      			'bid' => stock[7].to_f,
+      			'offer' => stock[8].to_f,
+      			'volume' => stock[9].to_i,
+      			'value' => stock[10].to_i,
+      			'vol_diff' => vol_diff,
+      			'perc_volume' => perc_volume
+      		}
+      	end
+      	p "doc: #{doc}"
+      	coll.insert(doc)
+      end
+      
+      def get_close_vol (date)
+        con = Mongo::Connection.new("127.0.0.1")
+      	db = con['stock']
+      	coll = db['closes']
+      	dd = coll.distinct('date').sort()
+      	i = dd.index(date)
+      	closedate = i.nil? ? dd.last : dd[i-1]
+        res = coll.find({'date' => closedate})	
+      	con.close
+      	
+      	h = {}
+      	res.each do |doc|
+      		sym = doc['symbol']
+      		close_vol = doc['volume'].to_i
+      		h[sym] = close_vol
+      	end
+        h
       end
       
       w = Net::HTTP.new("marketdata.set.or.th")
@@ -329,6 +427,12 @@ kbs:
       resp, data = w.get(req)
       
       data = resp.body
+      
+      # prepare for SET INDEX
+      # /remark/ when start == false -> ignore
+      # /remakr/ when start == true -> start = false
+      data = data.gsub(/bodytext-b/,'>bodytext-b<')
+      data = data.gsub(/remark/,'>remark<')
       d = data.split(/\n/)
       
       t = Time.now
@@ -341,38 +445,61 @@ kbs:
       date = "#{yy}#{mm}#{dd}"
       time = "#{hr}:#{mn}"
       
+      closex = get_close_vol(date)
+      
       start = false
       count = 0
       stock = []
+      close_vol = 0
+      perc_volume = 0.0
+      
+      con = Mongo::Connection.new("127.0.0.1")
       
       d.each do |l|
         l = l.chomp.gsub(/<.*?>/,'').strip
         l = l.tr(',','')
         next if l.length < 1
+      	if  l =~ /bodytext-b/
+      		start = true
+      	end
+      	if start and l =~ /remark/
+      		start = false
+      	end
       	if l =~ /ADVANC/
       		start = true
       	end
       	if start && l =~ /nbsp/
       		stock[-1] = stock[-1].to_i * 1000 # Values
-      		save(stock,date,time)
+      		volume = stock[9].to_f
+      		perc_volume = sprintf("%0.2f", volume * 100 / close_vol).to_f  if close_vol > 0
+      		save(con,stock,date,time,close_vol,perc_volume)
       		break
       	end
       	if start
-      		if l =~ /^[A-Z]/
+      		if l =~ /^[A-Z][A-Z]/ or l =~ /bodytext-b/
+      			l = l.gsub(/bodytext-b/,'')
+      			next if l =~ /^X/
       			if count == 0
       				stock = [l]
       				count = 1
       				next
       			elsif ['ATO','ATC'].include?(l)
       				stock << l
-      			elsif count == 1 # ignore XD XM ...
-      				count = 2
-      				next
       			else
       				stock[-1] = stock[-1].to_i * 1000 # Values
-      				save(stock,date,time)
+      				if stock[0] =~ /^SET/ or stock[0] =~ /mai/
+                volume = stock[6].to_f
+      					close_vol = 0
+      					perc_volume = 0.0
+      				else
+                volume = stock[9].to_f
+      					close_vol = closex[stock[0]]
+      					perc_volume = sprintf("%0.2f", volume * 100 / close_vol).to_f
+              end
+      				save(con,stock,date,time,close_vol,perc_volume)
       				count = 0
       				stock = [l]
+      				close_vol = closex[l]
       				next
       			end
       		else
@@ -381,8 +508,11 @@ kbs:
       		count += 1
       	end
       end
+      
+      cmd = "ruby get-bid-offer.rb"
+      system(cmd)
     - 2012-03-29 11:06:08.790665
-    - 2012-03-29 11:45:36.371662
+    - 2012-04-18 11:20:50.075757
   - - 10
     - windows,cron
     - Crontab for Windows
@@ -492,8 +622,9 @@ kbs:
       alias du='du -kh'
       alias df='df -kTh'
       alias tree='tree -Csu'
+      alias root='sudo su -'
       
-      CHANGE eth0 TO YOUR ACTUAL INTERFACE NAME
+      #CHANGE eth0 TO YOUR ACTUAL INTERFACE NAME
       MY_IP=$(/sbin/ifconfig eth0 | awk '/inet/ { print $2 } ' | sed -e s/addr://)
       
       case $(id -u) in
@@ -509,7 +640,7 @@ kbs:
               ;;
       esac
     - 2012-03-30 17:21:09.067107
-    - 2012-03-31 00:21:26.168951
+    - 2012-05-01 15:19:20.641405
   - - 16
     - firebug
     - FireBug Tips and Tricks
@@ -531,3 +662,4072 @@ kbs:
       # reboot
     - 2012-03-31 00:46:28.839647
     - 2012-03-31 00:46:28.839647
+  - - 18
+    - FC16,yum,groupinstall
+    - Install Development Environment for FC16
+    - |
+      Check available groupinstall
+      # yum  grouplist
+      
+      Install essential groups
+      # yum  -y  install  "Development Tools"
+      # yum  -y  install  "Development Libraries"
+      # yum  -y  install  "Server Configuration Tools"
+
+    - 2012-03-31 01:04:12.603449
+    - 2012-03-31 01:04:12.603449
+  - - 19
+    - FC16,tree
+    - !binary |
+      dHJlZS5zaCDguKrguLPguKvguKPguLHguJrguIHguLLguKPguYHguKrguJTg
+      uIcgZGlyZWN0b3JpZXM=
+
+    - |-
+      http://www.centerkey.com/tree/
+      
+      # nano tree.sh
+      
+      #!/bin/sh
+      #######################################################
+      #  UNIX TREE                                          #
+      #  Version: 2.3                                       #
+      #  File: ~/apps/tree/tree.sh                          #
+      #                                                     #
+      #  Displays Structure of Directory Hierarchy          #
+      #  -------------------------------------------------  #
+      #  This tiny script uses "ls", "grep", and "sed"      #
+      #  in a single command to show the nesting of         #
+      #  sub-directories.  The setup command for PATH       #
+      #  works with the Bash shell (the Mac OS X default).  #
+      #                                                     #
+      #  Setup:                                             #
+      #     $ cd ~/apps/tree                                #
+      #     $ chmod u+x tree.sh                             #
+      #     $ ln -s ~/apps/tree/tree.sh ~/bin/tree          #
+      #     $ echo "PATH=~/bin:\${PATH}" >> ~/.profile      #
+      #                                                     #
+      #  Usage:                                             #
+      #     $ tree [directory]                              #
+      #                                                     #
+      #  Examples:                                          #
+      #     $ tree                                          #
+      #     $ tree /etc/opt                                 #
+      #     $ tree ..                                       #
+      #                                                     #
+      #  Public Domain Software -- Free to Use as You Like  #
+      #  http://www.centerkey.com/tree  -  By Dem Pilafian  #
+      #######################################################
+      
+      echo
+      if [ "$1" != "" ]  #if parameter exists, use as base folder
+         then cd "$1"
+         fi
+      pwd
+      ls -R | grep ":$" |   \
+         sed -e 's/:$//' -e 's/[^-][^\/]*\//--/g' -e 's/^/   /' -e 's/-/|/'
+      # 1st sed: remove colons
+      # 2nd sed: replace higher level folder names with dashes
+      # 3rd sed: indent graph three spaces
+      # 4th sed: replace first dash with a vertical bar
+      if [ `ls -F -1 | grep "/" | wc -l` = 0 ]   # check if no folders
+         then echo "   -> no sub-directories"
+         fi
+      echo
+      exit
+    - 2012-03-31 02:28:21.076172
+    - 2012-03-31 02:28:21.076172
+  - - 20
+    - FC16,ruby
+    - Install ruby packages
+    - |-
+      Check installed packages
+      # rpm  -qa  |  grep  ruby
+      
+      Install ruby
+      # yum  -y  install  ruby  ruby-devel  ri  irb
+      
+      ==> 1.8.7
+    - 2012-03-31 03:52:45.438229
+    - 2012-03-31 03:52:45.438229
+  - - 21
+    - FC16,httpd
+    - Install Apache Wb Server for FC16
+    - |
+      Check installed packages
+      # rpm  -qa  |  grep  httpd
+      
+      Install httpd packages
+      # yum  -y  install  httpd  httpd-devel  httpd-tools
+      
+      Check httpd status
+      # systemctl  status  httpd.service
+      
+      Other commands
+      # systemctl  stop  httpd.service
+      # systemctl  start  httpd.service
+      # systemctl  restart  httpd.service
+      
+      Configuration file
+      # nano  /etc/httpd/conf/httpd.conf
+
+    - 2012-03-31 03:55:12.146282
+    - 2012-03-31 09:19:36.970387
+  - - 22
+    - FC16,vsftpd
+    - Install FTP server for FC16
+    - |
+      Check installed packages
+      # rpm  -qa  |  grep  vsftpd
+      
+      Install vsftpd package
+      # yum  -y  install  vsftpd
+      
+      Check status
+      # systemctl  status  vsftpd.service
+      
+      Other commands
+      # systemctl  stop|start|restart  vsftpd.service
+      
+      Enable vsftpd service
+      # chkconfig  vsftpd  on
+      
+      Test
+      # ftp  localhost
+      Name: admin
+      Password: 123456
+      ftp> bye
+      
+      Check for TCP PORT 20 21
+      # nano  /etc/sysconfig/iptables
+      .....
+      -A INPUT -m state --state NEW -m tcp -p tcp --dport 21 -j ACCEPT
+      -A INPUT -m state --state NEW -m tcp -p tcp --dport 20 -j ACCEPT
+      
+      # systemctl  restart  iptables.service
+
+    - 2012-03-31 07:38:45.306244
+    - 2012-04-03 02:32:00.555560
+  - - 23
+    - FC16,rvm,errors
+    - FC16 Terminal Configure
+    - |
+      192.168.229.130:admin
+      [~]$ rvm use 1.8.7
+      
+      RVM is not a function, selecting rubies with 'rvm use ...' will not work.
+      Please visit https://rvm.beginrescueend.com/integration/gnome-terminal/ for a solution.
+      
+      FIXED:
+      In Terminal > Edit > Profile Preferences > Title and Command >  Command > [x] Run command as a login shell
+
+    - 2012-03-31 07:48:25.749040
+    - 2012-03-31 07:48:25.749040
+  - - 24
+    - FC16.rvm.rails
+    - Install rails 3.1.3 via rvm
+    - |-
+      $ rvm  use  1.8.7
+      $ gem  source
+      http://rubygems.org
+      $ gem  source  -r  http://rubygems.org
+      $ gem  source  -a  http://ruby.taobao.org
+      
+      $ nano  .gemrc
+      gem:  --no-ri  --no-rdoc  --verbose
+      
+      $ gem  install  rails  -v  3.1.3
+    - 2012-03-31 07:56:37.997879
+    - 2012-03-31 07:56:37.997879
+  - - 25
+    - FC16.rvm,sqlite3
+    - Error install gem sqlite3
+    - |-
+      checking for sqlite3.h... no
+      sqlite3.h is missing. Try 'port install sqlite3 +universal'
+      or 'yum install sqlite-devel'
+      
+      # yum  -y  install  sqlite-devel
+      # rpm  -ql  sqlite-devel  |  grep  ".h"
+      /usr/include/sqlite3.h
+      /usr/include/sqlite3ext.h
+      
+      Reinstall sqlite3 gem again
+      SUCCESS!
+    - 2012-03-31 08:05:26.806811
+    - 2012-03-31 08:10:06.028405
+  - - 26
+    - FC16.locate
+    - Want to use locate
+    - |
+      You must run updatedb first then use locate later (once / week)
+      
+      # updatedb &
+      
+      NOTE: & make that command run in background and give you a prompt
+      
+      # locate  sqlite.h
+
+    - 2012-03-31 08:08:36.195234
+    - 2012-03-31 08:08:36.195234
+  - - 27
+    - VMware,NAT
+    - Configure NAT in VMware
+    - |-
+      Command: vmnetcfg.exe
+      You look for vmnetcfg.exe which is missing because a bug in the vmplayer setup -
+      run the vmplayer setup again from a cmd like this
+      
+      D:\> vmware-player*.exe  /e  tempdir
+      D:\> cd tempdir
+      Using 7-zip to extract network.cab > tempdir\network
+      find network.cab in tempdir and extract it
+      
+      copy vmnetcfg.exe to the player install dir
+      D:\> COPY vmnetcfg.exe  C:\Program Files\VMware\VMware Player
+      
+      Run vmnetcfg.exe to add Port Forwarding
+    - 2012-03-31 08:40:03.397185
+    - 2012-03-31 08:40:03.397185
+  - - 28
+    - RAILS,tinymce-rails
+    - Add WYSIWYG Editor
+    - |-
+      http://rubydoc.info/gems/tinymce-rails/3.4.9/frames
+      
+      http://fizmat.kz/downloads/index.php?q=aHR0cHM6Ly9naXRodWIuY29tL3Nwb2hsZW56L3RpbnltY2UtcmFpbHM%3D
+      
+      $ nano Gemfile
+      gem 'tinymce-rails'
+      
+      $ bundle
+      $ nano config/tinymce.yml
+      theme_advanced_toolbar_location: top
+      theme_advanced_toolbar_align: left
+      theme_advanced_statusbar_location: bottom
+      theme_advanced_buttons3_add:
+        - tablecontrols
+        - fullscreen
+      plugins:
+        - table
+        - fullscreen
+      
+      Add to your application.js:
+      $ nano  app/assets/javascripts/application.js
+      //= require tinymce 
+      
+      Initialize TinyMCE
+      
+      For each textarea that you want to use with TinyMCE, add the "tinymce" class and ensure it has a unique ID:
+      
+      $ nano  app/views/blogs/_form.html.erb
+      
+      <div>
+      .....
+      <%= f.text_area :content, "", :class => "tinymce", :rows => 5, :cols => 120 %>
+      </div>
+      <% tinymce %>
+    - 2012-03-31 09:26:42.255050
+    - 2012-03-31 10:00:55.278980
+  - - 29
+    - MongoDB
+    - Thailand MongoDB User Group
+    - http://mongodb.in.th/?mkt_tok=3RkMMJWWfF9wsRoksqjLZKXonjHpfsX76%2BsvUKO2lMI%2F0ER3fOvrPUfGjI4DScdiI%2FqLAzICFpZo2FEJSueQcg%3D%3D
+    - 2012-03-31 15:12:13.742074
+    - 2012-03-31 15:12:13.742074
+  - - 30
+    - RUBY,chart
+    - j4lchart for ruby
+    - http://www.java4less.com/chartsruby/chart.php
+    - 2012-04-01 16:44:52.479944
+    - 2012-04-01 16:44:52.479944
+  - - 31
+    - RUBY, chart
+    - J4Lchart
+    - |-
+      Java4less Chart (for Ruby)
+      
+      http://www.java4less.com/chartsruby/userguide/tutorialcontents.html
+      
+      http://www.java4less.com/chartsruby/chart.php?info=download
+    - 2012-04-03 07:26:07.460444
+    - 2012-04-05 12:02:37.236441
+  - - 32
+    - ruby,j4lchart
+    - ch-01.rb
+    - |
+      #!/usr/bin/ruby
+      
+      require 'rubygems'
+      
+      require 'chart_loader.rb'
+      require 'chart_image.rb'
+      require 'chart_graphics.rb'
+      require 'graphics_provider.rb'
+      
+      def paintCandleStick()
+        cha=J4LChart::ChartLoader.new()
+        cha.clearParams()
+      
+        cha.setParameter("TITLECHART","Price")
+        cha.setParameter("LEGEND","FALSE")
+        cha.setParameter("XLABEL","Day")
+        cha.setParameter("YLABEL","Million $")
+        cha.setParameter("XAXIS_INITIAL_DATE","10/10/2001")
+        cha.setParameter("XAXIS_DATE_STEP","d")
+        cha.setParameter("XAXIS_DATE_FORMAT","%d-%b")
+        cha.setParameter("SERIE_1","Products")
+        cha.setParameter("SERIE_COLOR_1","RED")
+        cha.setParameter("SERIE_DATA_1","22|43|50|45|55|32|42")
+        cha.setParameter("SERIE_DATAX_1","1|2|3|5|5|6|7")
+        cha.setParameter("SERIE_CLOSE_DATA_1","24|45|41|54|30|35|45")
+        cha.setParameter("SERIE_MAX_DATA_1","28|47|52|55|60|37|49")
+        cha.setParameter("SERIE_MIN_DATA_1","20|39|39|40|30|30|36")
+        cha.setParameter("SSERIE_MAXMIN_STYLE_1","0.2|BLACK|LINE")
+        cha.setParameter("SERIE_DRAW_LINE_1","N")
+        cha.setParameter("SERIE_LINE_TYPE_1","CANDLESTICK")
+        cha.setParameter("SERIE_TYPE_1","LINE")
+        cha.setParameter("CHART_BORDER","0.2|BLACK|LINE")
+        cha.setParameter("CHART_FILL","YELLOW")
+        cha.setParameter("BIG_TICK_INTERVALX","2")
+        cha.setParameter("BIG_TICK_INTERVALY","10")
+        cha.setParameter("YSCALE_MIN","0")
+        cha.setParameter("LEGEND_BORDER","0.2|BLACK|LINE")
+        cha.setParameter("LEGEND_FILL","WHITE")
+        cha.setParameter("XAXIS_GRID","0.2|WHITE|DASHED")
+        cha.setParameter("YAXIS_GRID","0.2|WHITE|DASHED")
+        cha.setParameter("XSCALE_MIN","-1")
+        cha.setParameter("XSCALE_MIN","0")
+        cha.setParameter("YSCALE_MAX","70")
+        cha.setParameter("XAXIS_TICKATBASE","true")
+        cha.setParameter("CERO_YAXIS","NO")
+        c=cha.build(false,false)
+        c.saveToFile("images/candlestick.png")
+      end
+      
+      paintCandleStick()
+      
+      print <<EOF
+      Content-type: text/html
+      
+      &lt;html>
+      &lt;body>
+      &lt;img src="images/candlestick.png" />
+      &lt;/body>
+      &lt;/html>
+      EOF
+
+    - 2012-04-04 14:58:57.039481
+    - 2012-04-04 15:01:27.362569
+  - - 33
+    - mongodb
+    - import/export CSV
+    - "IMPORT\r\n\
+      $ mongoimport  -d  <db>  -c  <collections>  --type csv  --file  <.csv>  --headerline\r\n\
+      \r\n\
+      NOTE:\r\n\
+      Capital CSV won't work!! use  csv\r\n\
+      \r\n\
+      EXPORT\r\n\
+      $ mongoexport  -d  <db>  -c  <collections>  --csv  -f \"Fld1,fld2,...\"  -o  <out.csv> "
+    - 2012-04-05 00:48:19.427145
+    - 2012-04-05 00:49:35.956950
+  - - 34
+    - mongodb,group
+    - Group for date,time
+    - |-
+      #!C:\Ruby193\bin\ruby.exe
+      
+      require 'rubygems'
+      require 'mongo'
+      
+      con = Mongo::Connection.new
+      db = con['set50']
+      coll = db['quotes']
+      
+      # find unique date from db:set50 collections:quotes
+      res = coll.group(
+        "function(x) { return { date: x.date, time:x.time }; }", 
+        nil, 
+        { :count => 0 }, 
+        "function(x,y){y.count++}", 
+        true
+      );  
+      
+      res.each do |doc|
+      	p doc
+      end
+      
+      RESULT:
+      {"date"=>20120403, "time"=>"18:01", "count"=>55.0}
+      {"date"=>20120404, "time"=>"10:02", "count"=>50.0}
+      {"date"=>20120404, "time"=>"10:03", "count"=>50.0}
+      {"date"=>20120404, "time"=>"10:04", "count"=>50.0}
+      ...
+    - 2012-04-05 04:29:55.651751
+    - 2012-04-05 04:30:51.197490
+  - - 35
+    - mongodb,update
+    - Add new attributes
+    - |
+      #!C:\Ruby193\bin\ruby.exe
+      
+      require 'rubygems'
+      require 'mongo'
+      
+      def update_quotes(doc)
+      	con = Mongo::Connection.new
+      	db = con['set50']
+      	coll = db['quotes']
+      	coll.update({"_id" => doc[:_id]}, 
+      										{"$set" => {
+      											"perc_volume" => doc[:perc_volume],
+      											"perc_value" => doc[:perc_value]
+      											}
+      										}
+      									)
+      	con.close
+      end
+      
+      def find_info(date,sym)
+      	con = Mongo::Connection.new
+      	db = con['set50']
+      	coll = db['closes']
+      	res = coll.find({:date=>date, :symbol=>sym})
+      	con.close
+      	info = []
+      	res.each do |doc|
+      		close = doc['close']
+      		vol = doc['volume']
+      		val = doc['value']
+      		info = [close,vol,val]
+      	end
+      	info
+      end
+      
+      con = Mongo::Connection.new
+      db = con['set50']
+      coll = db['quotes']
+      res = coll.find({:date=>20120404,:time=>'10:02'})
+      con.close
+      
+      res.each do |doc|
+      	id = doc['_id']
+      	date = doc['date']
+      	time = doc['time']
+      	sym = doc['symbol']
+      	close = doc['close'].to_f
+      	vol = doc['volume'].to_i
+      	val = doc['value'].to_i
+      	
+      	p sym
+      	info = find_info(20120403,sym)
+      	p info
+      	
+      	prev_close = info[0].to_f
+      	prev_vol = info[1].to_i
+      	prev_val = info[2].to_i
+      	
+      	perc_volume = sprintf("%0.2f", vol * 100.0 / prev_vol)
+      	perc_value = sprintf("%0.2f", val * 100.0 / prev_val)
+      
+        d = {
+      		:_id => id,
+      		:perc_volume => perc_volume.to_f,
+      		:perc_value => perc_value.to_f
+      	}
+      	update_quotes(d)
+      end
+
+    - 2012-04-05 05:52:28.664894
+    - 2012-04-05 05:52:28.664894
+  - - 36
+    - mongodb,update
+    - Add new attributes with loop
+    - |
+      #!C:\Ruby193\bin\ruby.exe
+      
+      require 'rubygems'
+      require 'mongo'
+      
+      def update_quotes(doc)
+      	con = Mongo::Connection.new
+      	db = con['set50']
+      	coll = db['quotes']
+      	coll.update({"_id" => doc[:_id]}, 
+      										{"$set" => {
+      											"perc_volume" => doc[:perc_volume],
+      											"perc_value" => doc[:perc_value]
+      											}
+      										}
+      									)
+      	con.close
+      end
+      
+      def find_info(date,sym)
+      	con = Mongo::Connection.new
+      	db = con['set50']
+      	coll = db['closes']
+      	res = coll.find({:date=>date, :symbol=>sym})
+      	con.close
+      	info = []
+      	res.each do |doc|
+      		close = doc['close']
+      		vol = doc['volume']
+      		val = doc['value']
+      		info = [close,vol,val]
+      	end
+      	info
+      end
+      
+      con = Mongo::Connection.new
+      db = con['set50']
+      coll = db['quotes']
+      res = coll.find({:date=>20120404},{:fields => {:date=>1,:time=>1,:symbol=>1,:close=>1,:volume=>1,:value=>1}})
+      con.close
+      
+      res.each do |doc|
+      	id = doc['_id']
+      	date = doc['date']
+      	time = doc['time']
+      	sym = doc['symbol']
+      	close = doc['close'].to_f
+      	vol = doc['volume'].to_i
+      	val = doc['value'].to_i
+      	
+      	p sym
+      	info = find_info(20120403,sym)
+      	p info
+      	
+      	prev_close = info[0].to_f
+      	prev_vol = info[1].to_i
+      	prev_val = info[2].to_i
+      	
+      	perc_volume = sprintf("%0.2f", vol * 100.0 / prev_vol)
+      	perc_value = sprintf("%0.2f", val * 100.0 / prev_val)
+      
+        d = {
+      		:_id => id,
+      		:perc_volume => perc_volume.to_f,
+      		:perc_value => perc_value.to_f
+      	}
+      	update_quotes(d)
+      end
+
+    - 2012-04-05 05:59:44.807513
+    - 2012-04-05 05:59:44.807513
+  - - 37
+    - mongo
+    - get-close-date.rb
+    - |-
+      #! C:\Ruby193\bin\ruby.exe
+      
+      require 'rubygems'
+      require 'net/http'
+      require 'mongo'
+      
+      def save_close(symbol,date,stock)
+      	con = Mongo::Connection.new("127.0.0.1")
+      	db   = con['set50']
+      	coll = db['closes']	
+      	doc = {
+      		'date' => date,
+      		'symbol' => symbol,
+      		'close' => stock[3].to_f,
+      		'volume' => stock[6].to_i,
+      		'value' => stock[7].to_i * 1000
+      	}
+      	coll.insert(doc)
+      	con.close
+      end
+      
+      date = ARGV[0]
+      #date = "04/04/2555"
+      
+      if date.nil?
+      	puts "usage: get-close-date.rb <date dd/mm/yyyy BE>\n"
+      	exit(0)
+      end
+      
+      t1 = Time.now
+      
+      ss = open("SET50.txt").readlines
+      n = 0
+      i = 0
+      ss.each do |s|
+      	n += 1
+      	 i = 0
+      	bidoffer = []
+      	sym = s.chomp
+      	w = Net::HTTP.new("www.set.or.th")
+      	req = "/set/historicaltrading.do?symbol=#{sym}&language=th&country=TH"
+      	resp, data = w.get(req)
+      
+      	data = resp.body
+      	d = data.split(/\n/)
+      	#puts "data.length: #{data.length}"
+      	#puts "d.size: #{d.size}"
+      	
+      	start = false
+      	count = 0
+      	stock = []
+      	n = 0
+      
+      	d.each do |l|
+      		l = l.chomp.gsub(/<.*?>/,'').strip
+      		l = l.tr(',','') # remove comma
+      		next if l.length < 1
+      		if l =~ /#{date}/
+      			start = true
+      			next
+      		end
+      		if start
+      			n += 1
+      			stock << l
+      			if n == 8
+      				save_close(sym,date,stock)
+      				break
+      			end
+      		end
+      	end
+      end
+      
+      t2 = Time.now
+      puts "Time: #{t2-t1} seconds"
+    - 2012-04-05 10:01:50.136919
+    - 2012-04-05 11:35:00.863556
+  - - 38
+    - mongodb,distinct
+    - Get distinct date,time
+    - |-
+      db.quotes.group({
+        key: {date:1, time:1},
+        reduce: function(obj, prev){
+          if (!obj.hasOwnProperty("key")) {
+            prev.date = obj.date;
+            prev.time = obj.time;
+          }
+        },
+        initial: { }
+      });
+    - 2012-04-05 11:37:30.837516
+    - 2012-04-05 11:37:30.837516
+  - - 39
+    - mongodb,analyse
+    - analyse-volume.rb
+    - |-
+      #! C:\Ruby193\bin\ruby.exe
+      
+      require 'rubygems'
+      require 'net/http'
+      require 'mongo'
+      
+      def save_analyse(date,time,sym,bid,vol_bid,offer,vol_offer,close,volume,perc_vol_chg,value,perc_val_chg)
+      	con = Mongo::Connection.new("127.0.0.1")
+      	db   = con['set50']
+      	coll = db['analyses']	
+        doc = {
+      		'date' => date,
+      		'time' => time,
+      		'symbol' => sym,
+      		'bid' => bid,
+      		'vol_bid' => vol_bid,
+      		'offer' => offer,
+      		'vol_offer' => vol_offer,
+      		'close' => close,
+      		'volume' => volume,
+      		'perc_vol_chg' => perc_vol_chg,
+      		'value' => value,
+      		'perc_val_chg' => perc_val_chg
+      	}
+      	coll.insert(doc)
+      	con.close
+      end
+      
+      def get_stats(date, time, symbol)
+      	con = Mongo::Connection.new("127.0.0.1")
+      	db   = con['set50']
+      	coll = db['quotes']	
+      	res = coll.find_one({:date => date, :time => time, :symbol => symbol},
+      	                          {:fields => {:bid => 1, :vol_bid => 1,
+      														                  :offer => 1, :vol_offer => 1,
+      																							:close => 1, :volume => 1,:value => 1} })
+      	con.close
+        bid = res['bid']
+      	vol_bid = res['vol_bid']
+      	offer = res['offer']
+      	vol_offer = res['vol_offer']
+      	close = res['close']
+      	volume = res['volume']
+      	value = res['value']
+      	info = [bid,vol_bid,offer,vol_offer,close,volume,value]
+      end
+      
+      def get_close(date, symbol)
+      	con = Mongo::Connection.new("127.0.0.1")
+      	db   = con['set50']
+      	coll = db['closes']	
+      	res = coll.find_one({:date => date, :symbol => symbol},
+      	                          {:fields => {:close => 1,:volume => 1,:value => 1} })
+      	con.close
+      	close = res['close'].to_f
+      	vol = res['volume'].to_i
+      	val = res['value'].to_i
+      	info = [close,vol,val]
+      end
+      
+      def get_newest(date)
+      	con = Mongo::Connection.new("127.0.0.1")
+      	db   = con['set50']
+      	coll = db['quotes']	
+      	res = coll.find_one({:date => date},{:fields => {:time => -1} })
+      	con.close
+      	time = nil
+      	res.each do |doc|
+      		#["time", "14:35"]
+      		time = doc[1]
+      	end
+      	time
+      end
+      
+      t1 = Time.now
+      
+      t = Time.now
+      t_prev = t - 24 * 60 * 60
+      
+      yy = t.year
+      mm = sprintf("%02d", t.mon)
+      dd = sprintf("%02d", t.day)
+      hr = sprintf("%02d", t.hour)
+      mn = sprintf("%02d", t.min)
+      
+      yy_prev = t_prev.year + 543
+      mm_prev = sprintf("%02d", t_prev.mon)
+      dd_prev = sprintf("%02d", t_prev.day)
+      
+      date = "#{yy}#{mm}#{dd}"
+      time = get_newest(date)
+      #14:35
+      date_prev = "#{dd_prev}/#{mm_prev}/#{yy_prev}"
+      
+      ss = open("SET50.test").readlines
+      ss.each do |s|
+      	sym = s.chomp
+      	info = get_close(date_prev, sym)
+      	close_prev = info[0]
+      	vol_prev = info[1]
+      	val_prev = info[2]
+      	info = get_stats(date,time,sym)
+      	bid = info[0]
+      	vol_bid = info[1]
+      	offer = info[2]
+      	vol_offer = info[3]
+      	close = info[4]
+      	volume = info[5]
+      	value = info[6]
+      	perc_vol_chg = sprintf("%0.2f", volume * 100.0 / vol_prev).to_f
+      	perc_val_chg = sprintf("%0.2f", value * 100.0 / val_prev).to_f
+      	save_analyse(date,time,sym,bid,vol_bid,offer,vol_offer,close,volume,perc_vol_chg,value,perc_val_chg)
+      end
+      
+      t2 = Time.now
+      puts "Time: #{t2-t1} seconds"
+    - 2012-04-05 11:46:45.846342
+    - 2012-04-05 11:46:45.846342
+  - - 40
+    - Chart
+    - HighCharts
+    - |-
+      http://www.highcharts.com/demo/column-stacked-percent/dark-blue
+      
+      API Reference
+      http://www.highcharts.com/ref/#chart--type
+    - 2012-04-05 13:29:25.153350
+    - 2012-04-08 11:26:16.977133
+  - - 41
+    - qrycombobox
+    - Ext.ux.form.QryComboBox
+    - |
+      Ext.ns('Ext.ux.form');
+      Ext.ux.form.QryComboBox = Ext.extend(Ext.form.ComboBox, {
+        fieldStore: []
+        ,rootStore: 'records'
+        ,totalStore: 'totalcount'
+        ,urlStore: ''
+        ,initComponent: function(){
+          Ext.apply(this, {
+            editable: true
+            ,pageSize: 10
+            ,minChars: 1
+            ,store: new Ext.data.Store({
+              reader: new Ext.data.JsonReader({
+                fields: this.fieldStore
+                ,root: this.rootStore
+                ,totalProperty: this.totalStore
+              })
+              ,url: this.urlStore
+              ,listeners: {
+                load: function( store, records,options ) {
+                  delete(store.baseParams["query"]);
+                  if (store.lastOptions && store.lastOptions.params) {
+                    delete(store.lastOptions.params["query"]);
+                  }
+                }
+              }
+            })
+            ,triggerAction: 'all'
+            ,emptyText: 'Search...'
+            ,autoSelect: false
+            ,listeners: {
+              blur: function(el){
+                if (el.getValue() == el.getRawValue()){
+                  el.clearValue();
+                }
+              }
+              ,beforequery: function(qry){
+                delete qry.combo.lastQuery;
+              }
+            }
+          });
+          Ext.ux.form.QryComboBox.superclass.initComponent.apply(this, arguments);
+        }
+      })
+      Ext.reg('qrycombobox', Ext.ux.form.QryComboBox);
+
+    - 2012-04-06 05:00:12.103440
+    - 2012-04-08 23:14:17.759020
+  - - 42
+    - Pis query
+    - ""
+    - "  def cj18status\r\n    limit = params[:limit].to_i\r\n    start = params[:start].to_i\r\n    search = \"\"\r\n    if params[:query].to_s != \"\"      \r\n      search = \"and (j18code::varchar = '#{params[:query]}'\"\r\n      search += \" or j18status::varchar like '%#{params[:query]}%' )\";\r\n    end\r\n    if params[:j18code].to_s != \"\"\r\n      search += \" and j18code = '#{params[:j18code]}' \"\r\n    end\r\n    records = Cj18status.where(\"use_status = '1' #{search}\").order(\"j18status asc\").paginate :per_page => limit,:page => ((start / limit) + 1)\r\n    return_data = Hash.new()\r\n    return_data[:success] = true\r\n    return_data[:totalcount] = Cj18status.where(\"use_status = '1' #{search}\").count()\r\n    return_data[:records]   = records.collect{|u| {   \r\n      :j18code => u.j18code,\r\n      :j18status => \"#{u.j18status}(#{u.j18code})\".strip\r\n    } }\r\n    render :text => return_data.to_json, :layout => false  \r\n  end\r\n"
+    - 2012-04-06 05:00:43.331898
+    - 2012-04-06 05:00:43.331898
+  - - 43
+    - Pis example
+    - ""
+    - "new Ext.ux.form.PisComboBox({//\xE0\xB8\x81\xE0\xB8\xA3\xE0\xB8\xB0\xE0\xB8\x97\xE0\xB8\xA3\xE0\xB8\xA7\xE0\xB8\x87\r\n                                                               hiddenName: 'pisj18[mincode]'\r\n                                                               ,id: 'pisj18[mincode]'\r\n                                                               ,valueField: 'mcode'\r\n                                                               ,displayField: 'minname'\r\n                                                               ,urlStore: pre_url + '/code/cministry'\r\n                                                               ,fieldStore: ['mcode', 'minname']\r\n                                                               ,width: 250                                                               \r\n                                                      })"
+    - 2012-04-06 05:01:57.806655
+    - 2012-04-06 05:01:57.806655
+  - - 44
+    - RAILS,simple_form
+    - Hidden Input example
+    - "    <% if is_admin? %>\r\n      <%= f.input :role,\r\n                  :as => :select,\r\n                  :collection => ['member','admin']\r\n      %>\r\n    <% else %>\r\n      <%= f.input :role, :as => :hidden, :input_html => {:value => 'member'} %>\r\n    <% end %>\r\n"
+    - 2012-04-06 10:35:32.918796
+    - 2012-04-06 10:35:32.918796
+  - - 45
+    - mongodb,map_reduce
+    - Ruby-Mongo Map/Reduce example
+    - |
+      #! C:\Ruby193\bin\ruby.exe
+      
+      # mongo-report-02.rb Count number of records on date: '20120405' GROUP BY symbol
+       
+      require 'rubygems'
+      require 'mongo'
+      
+      con = Mongo::Connection.new("127.0.0.1")
+      db   = con['set50']
+      coll = db['quotes']
+      
+      map = "function() {
+      							var key = {'symbol':this.symbol}; 
+      							emit(key, {'count':1});
+      					}"
+      reduce = "function(key,values) {
+      								var sum = 0;
+      								values.forEach (function(value){
+      								  sum += value['count'];
+      								});
+      								return {'count':sum};
+      							}"
+      res = coll.map_reduce(map, reduce, {:out => "group_by_symbol"})
+      
+      coll = db['group_by_symbol']
+      res = coll.find
+      res.each do |doc|
+      	puts doc.inspect
+      end
+      
+      con.close
+      
+      =begin
+      > map
+      function() {var key = {'symbol':this.symbol}; emit(key, {'count':1})}
+      > reduce
+      function(key,values) {var sum = 0;values.forEach(function(value){sum += value['count'];});
+      return {'count':sum};}
+      > db.quotes.mapReduce(map, reduce, {'out':"group_by_symbol"})
+      {
+              "result" : "group_by_symbol",
+              "timeMillis" : 748,
+              "counts" : {
+                      "input" : 14355,
+                      "emit" : 14355,
+                      "reduce" : 765,
+                      "output" : 54
+              },
+              "ok" : 1,
+      }
+      =end
+
+    - 2012-04-07 07:51:25.697682
+    - 2012-04-07 08:02:03.177736
+  - - 46
+    - mongodb,set50
+    - get-bid-offer.rb
+    - |-
+      #! C:\Ruby193\bin\ruby.exe
+      
+      require 'rubygems'
+      require 'net/http'
+      require 'mongo'
+      
+      def save_bidoffer(con,symbol,date,time,bidoffer)
+      	db   = con['stock']
+      	coll = db['quotes']
+      	
+      	update_query = { "$set" => {
+      		'bid' => bidoffer[0].to_f,
+      		'vol_bid' => bidoffer[1].to_i,
+      		'offer' => bidoffer[2].to_f,
+      		'vol_offer' => bidoffer[3].to_i
+      	} }
+      	p symbol,date,time
+      	p update_query
+      	
+      	coll.update({"symbol" => symbol,"date" => date,"time" => time}, 
+      									update_query)
+      	con.close
+      end
+      
+      con = Mongo::Connection.new("127.0.0.1")
+      ss = open("SET50.txt").readlines
+      n = 0
+      i = 0
+      
+      ss.each do |s|
+      	n += 1
+      	i = 0
+      	bidoffer = []
+      	sym = s.chomp
+      	w = Net::HTTP.new("marketdata.set.or.th")
+      	req = "/mkt/stockquotation.do?symbol=#{sym}&language=th&country=TH"
+      	resp, data = w.get(req)
+      
+      	data = resp.body
+      	d = data.split(/\n/)
+      	#puts "data.length: #{data.length}"
+      	#puts "d.size: #{d.size}"
+      	
+      	t = Time.now
+      	yy = t.year
+      	mm = sprintf("%02d", t.mon)
+      	dd = sprintf("%02d", t.day)
+      	hr = sprintf("%02d", t.hour)
+      	mn = sprintf("%02d", t.min)
+      
+      	date = "#{yy}#{mm}#{dd}"
+      	time = "#{hr}:#{mn}"
+      
+      	start = false
+      	count = 0
+      	stock = []
+      
+      	d.each do |l|
+      		l = l.chomp.gsub(/<.*?>/,'').strip
+      		l = l.tr(',','')
+      		next if l.length < 1
+      		if l =~ /^\d/ and l =~ /nbsp/
+      			start = true
+      		elsif l =~ /^ATO/
+      			break
+      		end
+      		if start
+      			next if l.to_i == 0
+      			i += 1
+      			l = l.split(' ').first
+      			bidoffer << l
+      			if i == 4
+      				save_bidoffer(con,sym,date,time,bidoffer)
+      			end
+      		end
+      	end
+      end
+    - 2012-04-08 00:56:23.990035
+    - 2012-04-18 06:53:18.466580
+  - - 47
+    - SET50
+    - List 50 Symbols
+    - |-
+      ADVANC
+      AOT
+      BANPU
+      BAY
+      BBL
+      BCP
+      BEC
+      BGH
+      BH
+      BIGC
+      BJC
+      BLA
+      BTS
+      CPALL
+      CPF
+      CPN
+      DCC
+      DELTA
+      DTAC
+      EGCO
+      ESSO
+      GLOW
+      HMPRO
+      IRPC
+      IVL
+      KBANK
+      KTB
+      LH
+      MAKRO
+      MINT
+      PS
+      PTT
+      PTTEP
+      PTTGC
+      RATCH
+      ROBINS
+      SCB
+      SCC
+      SCCC
+      SPALI
+      STA
+      TCAP
+      THAI
+      TISCO
+      TMB
+      TOP
+      TPC
+      TPIPL
+      TRUE
+      TUF
+    - 2012-04-08 00:57:27.921609
+    - 2012-04-08 00:57:27.921609
+  - - 48
+    - SET50,cron
+    - get-quote.bat
+    - |-
+      D:
+      cd D:\SET
+      ruby get-quote-mongo.rb
+      ruby create-analyse-from-quote.rb
+    - 2012-04-08 01:11:29.660523
+    - 2012-04-18 11:19:49.173022
+  - - 49
+    - mongo,highchart
+    - hc-show.rb
+    - |-
+      #!/usr/bin/ruby
+      
+      require 'rubygems'
+      require 'mongo'
+      require 'cgi'
+      
+      def show(sym)
+      
+      con = Mongo::Connection.new("192.168.1.40")
+      db   = con['set50']
+      coll = db['analyses']
+      res = coll.find({:date => "20120405",:symbol => sym}).sort([:time, 1])
+      con.close
+      
+      oldv = 0
+      voldif = 0
+      
+      tm = []
+      vbid = []
+      voff = []
+      pbid = []
+      poff = []
+      bd = []
+      of = []
+      cl = []
+      pvc = []
+      
+      res.each do |doc|
+        time = doc['time']
+        offer = doc['offer'].to_f
+        bid = doc['bid'].to_f
+        vol_offer = doc['vol_offer'].to_i
+        vol_bid = doc['vol_bid'].to_i
+        close = doc['close'].to_f
+        perc_vol_chg = doc['perc_vol_chg'].to_f
+        volume = doc['volume'].to_i
+        if oldv == 0
+          voldiff = volume
+        else
+          voldiff = volume - oldv
+        end
+        oldv = volume
+      
+        next if vol_bid == 0 and vol_offer == 0
+      
+        bidp = vol_bid * 100 / (vol_bid + vol_offer)
+        offp = 100 - bidp
+      
+        tm << time
+        pbid << bidp
+        poff << offp
+        vbid << vol_bid
+        voff << vol_offer
+        bd << bid
+        of << offer
+        cl << close
+        pvc << perc_vol_chg
+      end
+      
+      time = "['#{tm.join("','")}']"
+      
+      h = &lt;&lt;EOF
+      Content-type: text/html
+      
+      &lt;!DOCTYPE HTML>
+      &lt;html>
+      &lt;head>
+      &lt;meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+      &lt;title>Stock Example&lt;/title>
+      
+      &lt;script type="text/javascript" src="js/jquery-1.7.1.min.js"></script>
+      &lt;script type="text/javascript">
+      $(function () {
+        var chart;
+        $(document).ready(function() {
+          chart = new Highcharts.Chart({
+          chart: {
+                   renderTo: 'container',
+                   zoomtype: 'xy',
+                   height: 600
+                 },
+                 title: {
+                   text: '#{sym}'
+                 },
+                 plotOptions: {
+                      column: {
+                          stacking: 'percent',
+                          lineColor: '#ffffff',
+                          lineWidth: 1,
+                          marker: {
+                              lineWidth: 1,
+                              lineColor: '#ffffff'
+                          }
+                      }
+                  },
+                 xAxis: {
+                   categories: #{time},
+                   labels: {
+                     rotation: 270
+                   }
+                 },
+                 yAxis: [{
+                   opposite: true,
+                   labels: {
+                     formatter: function() {
+                       if (this.value <= 100)
+                         return this.value + ' %';
+                     },
+                     style: { color: '#89A54E' },
+                     enabled: true
+                   },
+                   title: {
+                     text: '',
+                     style: { color: '#89A54E' }
+                   },
+                   max: 400
+                 },{
+                   labels: {
+                     formatter: function() {
+                       return this.value + ' Baht';
+                     },
+                     enabled: true
+                   },
+                   gridLineWidth: 0,
+                   title: {
+                     text: 'Price',
+                     style: { color: '#4572A7' }
+                   }
+                 },{
+                   opposite: true,
+                   labels: {
+                     formatter: function() {
+                       return this.value / 1000000.0 + ' M Shares';
+                     },
+                     enabled: false
+                   },
+                   gridLineWidth: 0,
+                   title: {
+                     text: 'Volume',
+                     style: { color: '#4500A7' }
+                   }
+                 },{
+                   opposite: true,
+                   labels: {
+                     formatter: function() {
+                       return this.value + ' %';
+                     },
+                     enabled: true
+                   },
+                   gridLineWidth: 0,
+                   title: {
+                     text: 'Perc Vol Change',
+                     style: { color: '#FF9900' }
+                   }
+                 }],
+                 tooltip: {
+                   formatter: function() {
+                     var unit = {
+                       'Offer%': '%',
+                       'Offer': 'Baht',
+                       'Close': 'Baht',
+                       'Bid': 'Baht',
+                       'VolOffer': 'Shares',
+                       'VolBid': 'Shares',
+                       'PercVol': '%'
+                     }[this.series.name];
+      
+                     return ''+
+                       this.x + ': ' + this.y + ' ' + unit;
+                   }
+                 },
+                 series: [
+                   {
+                     name: 'Offer%',
+                     type: 'column',
+                     color: '#89A54E',
+                     data: [#{poff.join(',')}]
+                   }, {
+                     name: 'Bid%',
+                     type: 'column',
+                     color: '#4572A7',
+                     data: [#{pbid.join(',')}]
+                   }, {
+                     name: 'Offer',
+                     type: 'scatter',
+                     color: '#AA0000',
+                     yAxis: 1,
+                     data: [#{of.join(',')}]
+                   }, {
+                     name: 'Close',
+                     type: 'line',
+                     color: '#AA4643',
+                     yAxis: 1,
+                     data: [#{cl.join(',')}]
+                   }, {
+                     name: 'Bid',
+                     type: 'scatter',
+                     color: '#00AA00',
+                     yAxis: 1,
+                     data: [#{bd.join(',')}]
+                   }, {
+                     name: 'VolOffer',
+                     type: 'line',
+                     color: '#0000FF',
+                     yAxis: 2,
+                     data: [#{voff.join(',')}]
+                   }, {
+                     name: 'VolBid',
+                     type: 'line',
+                     color: '#0000FF',
+                     yAxis: 2,
+                     data: [#{vbid.join(',')}]
+                   }, {
+                     name: 'PercVol',
+                     type: 'line',
+                     color: '#FF9900',
+                     yAxis: 3,
+                     data: [#{pvc.join(',')}]
+                 }]
+          });
+        });
+      });
+      &lt;/script>
+      &lt;/head>
+      &lt;body>
+      
+      &lt;script src="js/highcharts.js"></script>
+      &lt;script src=""js/modules/exporting.js"></script>
+      &lt;div id="container" style="min-width: 400px; height: 400px; margin: 0 auto">&lt;/div>
+      
+      &lt;/body>
+      &lt;/html>
+      EOF
+      
+      print h
+      end
+      
+      c = CGI.new
+      sym = c['symbol'].to_s.upcase
+      if sym =~ /[A-Z]/
+        show(sym)
+      else
+      
+      print &lt;&lt;EOF
+      Content-type: text/html
+      
+      &lt;html>
+      &lt;body>
+      &lt;table border="1">
+      &lt;tr>
+        &lt;th>SYMBOL&lt;/th>&lt;th>SYMBOL&lt;/th>&lt;th>SYMBOL&lt;/th>&lt;th>SYMBOL&lt;/th>&lt;th>SYMBOL&lt;/th>
+      &lt;/tr>
+      EOF
+      
+      set50 = open("SET50").readlines.to_s.gsub(/\n/,'|')
+      ss = set50.split('|')
+      i = 0
+      (0..9).each do |n|
+        i = 5*n
+        print "\n&lt;tr>\n"
+        print "  &lt;td>&lt;a href='hc-show.rb?symbol=#{ss[i]}' target='_blank'>#{ss[i]}&lt;/td>"
+        print "  &lt;td>&lt;a href='hc-show.rb?symbol=#{ss[i+1]}' target='_blank'>#{ss[i+1]}&lt;/td>"
+        print "  &lt;td>&lt;a href='hc-show.rb?symbol=#{ss[i+2]}' target='_blank'>#{ss[i+2]}&lt;/td>"
+        print "  &lt;td>&lt;a href='hc-show.rb?symbol=#{ss[i+3]}' target='_blank'>#{ss[i+3]}&lt;/td>"
+        print "  &lt;td>&lt;a href='hc-show.rb?symbol=#{ss[i+4]}' target='_blank'>#{ss[i+4]}&lt;/td>"
+        print "\n&lt;/tr>\n"
+      end
+      
+      print &lt;&lt;EOF
+      &lt;/table>
+      &lt;/body>
+      &lt;/html>
+      EOF
+      
+      end
+    - 2012-04-08 11:44:08.449825
+    - 2012-04-08 12:00:36.959895
+  - - 50
+    - JSON Check
+    - JSLINT
+    - http://jsonlint.com/
+    - 2012-04-09 03:12:24.683280
+    - 2012-04-09 03:12:24.683280
+  - - 51
+    - LINUX,iconv
+    - Convert from iso-8859-11 to UTF8
+    - $ iconv  -f  iso-8859-11  -t  utf8  Test2.csv  >  Test2UTF8.csv
+    - 2012-04-10 06:33:35.003074
+    - 2012-04-10 06:33:35.003074
+  - - 52
+    - WMS,WEB,MAP
+    - Available WMS Services
+    - |-
+      Below is a list of WMS Servers that can be publicly accessed. Each entry lists the WMS's URL, as well as a list of its supported parameters and a sample OpenLayers usage.
+      
+      Labs at MetaCarta
+      description: Standard OpenLayers WMS
+      url:  http://labs.metacarta.com/wms/vmap0
+      params:
+      layers: basic?
+      Usage:
+      var layer = new OpenLayers.Layer.WMS( "OpenLayers WMS", 
+                            "http://labs.metacarta.com/wms/vmap0", 
+                            {layers: 'basic'} );
+      NASA Satellite
+      description: NASA Satellite
+      url:  http://wms.jpl.nasa.gov/wms.cgi
+      params:
+      layers: ['modis','global_mosaic']
+      exceptions : application/vnd.ogc.se_inimage?
+      format: image/jpeg?
+      Usage:
+                  var jpl_wms = new OpenLayers.Layer.WMS( "NASA Global Mosaic",
+                      "http://wms.jpl.nasa.gov/wms.cgi", 
+                      {layers: "modis,global_mosaic"});
+      Population Density 2000
+      description: World Population Density 2000
+      url:  http://beta.sedac.ciesin.columbia.edu/mapserver/wms/gpw2000
+      params:
+      layers: gpw?
+      Usage:
+                  var jpl_wms = new OpenLayers.Layer.WMS( "Population Density 2000",
+                      "http://beta.sedac.ciesin.columbia.edu/mapserver/wms/gpw2000", 
+                      {layers: "gpw"});
+      Human Footprint
+      description: Human Footprint
+      url:  http://beta.sedac.ciesin.columbia.edu/mapserver/wms/hfoot
+      params:
+      layers: hfoot?
+      Usage:
+                  var cie_wms = new OpenLayers.Layer.WMS( "Human Footprint",
+                      "http://beta.sedac.ciesin.columbia.edu/mapserver/wms/hfoot", 
+                      {layers: "hfoot"});
+      NYC Freemap
+      description: Layers of New York City. Only covers the city.
+      url:  http://nyc.freemap.in/cgi-bin/mapserv?MAP=/www/freemap.in/nyc/map/basemap.map
+      params:
+      layers: ['openspace','water','buildings','roads']
+      Usage:
+                  var wms = new OpenLayers.Layer.WMS( "NYC",
+                      "http://nyc.freemap.in/cgi-bin/mapserv?MAP=/www/freemap.in/nyc/map/basemap.map", 
+                      {layers: "'openspace,water,buildings,roads'"});
+      DM Solutions Demo
+      description: DM Solutions Demo
+      url:  http://www2.dmsolutions.ca/cgi-bin/mswms_gmap
+      params:
+      layers: ['bathymetry','land_fn','park','drain_fn,drainage','prov_bound','fedlimit','rail','road','popplace']
+      transparent: ['true','false']
+      format: image/png?
+      Usage:
+      var dm_wms = new OpenLayers.Layer.WMS( "DM Solutions Demo",
+                      "http://www2.dmsolutions.ca/cgi-bin/mswms_gmap",
+                      {layers: "bathymetry,land_fn,park,drain_fn,drainage," +
+                               "prov_bound,fedlimit,rail,road,popplace",
+                       transparent: "true", format: "image/png" });
+      Boston Freemap
+      description: Boston Freemap
+      url:  http://boston.freemap.in/cgi-bin/mapserv?
+      params:
+      layers: ['border','water', 'roads', 'rapid_transit', 'buildings']
+      transparent: ['true','false']
+      format: png?
+      Usage:
+      var basemap = new OpenLayers.Layer.WMS( "Boston", 
+                      "http://boston.freemap.in/cgi-bin/mapserv?",
+                      {map: '/www/freemap.in/boston/map/gmaps.map', layers: 'border,water,roads', format: 'png', 'transparent': 'off'});
+      CIA World Factbook (DOWN?)
+      description: CIA World Factbook
+      url: " http://world.freemap.in/cgi-bin/mapserv?map=/www/freemap.in/world/map/factbook.map
+      params:
+      layers: factbook?
+      Usage:
+          var wms = new OpenLayers.Layer.WMS( "Factbook", 
+              "http://world.freemap.in/cgi-bin/mapserv?map=/www/freemap.in/world/map/factbook.map", {'layers': 'factbook'} );
+      Topo Maps
+      description: Topo Maps (US only)
+      url:  http://terraservice.net/ogcmap.ashx
+      params:
+      layers: DRG?
+      Usage:
+                  var drg = new OpenLayers.Layer.WMS("Topo Maps",
+                      "http://terraservice.net/ogcmap.ashx",
+                      {layers: "DRG"});
+      Shaded Relief
+      description: Shaded Relief (US only)
+      url:  http://ims.cr.usgs.gov:80/servlet19/com.esri.wms.Esrimap/USGS_EDC_Elev_NED_3
+      params:
+      layers: HR-NED.IMAGE?
+      reaspect: false?
+      transparent: ['true','false']
+      Usage:
+                  shade = new OpenLayers.Layer.WMS("Shaded Relief",
+                      "http://ims.cr.usgs.gov:80/servlet19/com.esri.wms.Esrimap/USGS_EDC_Elev_NED_3", 
+                      {layers: "HR-NED.IMAGE", reaspect: "false", transparent: 'true'});
+      Nexrad
+      description: Nexrad Weather Feed
+      url:  http://online.resource.url/wms/script
+      params:
+      layers: nexrad-n0r-wmst?
+      transparent: ['true','false']
+      format: image/png?
+      Usage:
+      	        ia_wms = new OpenLayers.Layer.WMS("Nexrad",
+                                     "http://mesonet.agron.iastate.edu/cgi-bin/wms/nexrad/n0r.cgi?",
+                                     {layers:"nexrad-n0r-wmst",transparent:"true",format:'image/png'});
+      Example entry
+      description: Description of the layer
+      url:  http://online.resource.url/wms/script
+      params:
+      layers: ['layers','here']
+      Usage:
+                  var wms = new OpenLayers.Layer.WMS( "Example Entry",
+                      "http://online.resource.url/wms/script", 
+                      {layers: "layers"});
+    - 2012-04-11 00:44:10.518721
+    - 2012-04-11 00:44:10.518721
+  - - 53
+    - DenyHosts
+    - Install package DenyHosts
+    - |-
+      # yum  -y  install  denyhosts
+      
+      # service  denyhosts  status
+      
+      # service  denyhosts  start/restart
+      
+      # chkconfig denyhosts  on
+    - 2012-04-11 01:03:13.133849
+    - 2012-04-11 01:03:13.133849
+  - - 54
+    - OPL
+    - ex-01.html
+    - |-
+      &lt;!DOCTYPE html>
+      &lt;html lang='en'>
+      &lt;head>
+      &lt;meta charset='utf-8' />
+      &lt;title>My OpenLayers Map&lt;/title>
+      &lt;script type='text/javascript' src='OpenLayers.js'>&lt;/script>
+      &lt;script type='text/javascript'>
+      
+      var map;
+      
+      function init() {
+      	map = new OpenLayers.Map('map_element', {});
+      	var wms = new OpenLayers.Layer.WMS(
+      		'OpenLayers WMS',
+      		'http://vmap0.tiles.osgeo.org/wms/vmap0',
+      		{layers: 'basic'},
+      		{}
+      	);
+      
+      	map.addLayer(wms);
+      	if(!map.getCenter()){
+      	//map.zoomToMaxExtent();
+      	//map.zoomToExtent( new OpenLayers.Bounds( 97.25, 5.5, 105.75, 20.5)); //Thailand Extent
+              map.setCenter( new OpenLayers.LonLat(101.5, 13); //Thailand Center
+              map.zoomTo(5);
+      	}
+      }
+      
+      &lt;/script>
+      &lt;/head>
+      
+      &lt;body onload='init();'>
+       &lt;div id='map_element' style='width: 500px; height: 500px;'>
+       &lt;/div>
+      &lt;/body>
+      &lt;/html>
+    - 2012-04-11 01:51:26.717740
+    - 2012-04-11 02:21:41.865191
+  - - 55
+    - OPL
+    - Installation
+    - |
+      D/L OpenLayers-2.11.tar.gz
+      http://openlayers.org/download/OpenLayers-2.11.tar.gz
+      
+      Extract to /
+      # cd  /
+      # tar  -xzvf  OpenLayers-2.11.tar.gz
+      
+      Make alias
+      # ln  -s  OpenLayers-2.11  opl
+      
+      Make sandbox folder
+      # mkdir /opl-test
+      # chmod 777 /opl-test
+      
+      Add to httpd.conf
+      # nano  /etc/httpd/conf/httpd.conf
+      ...
+      Alias /opl  "/opl/"
+      &lt;Directory "/opl">
+        Options  Indexes  Includes  FollowSymLinks ExecCGI
+        DirectoryIndex  index.html
+        Order  allow,  deny
+        Allow  from  all
+      &lt;/Directory>
+      
+      Alias /opl-test  "/opl-test/"
+      &lt;Directory "/opl-test">
+        Options  Indexes  Includes  FollowSymLinks ExecCGI
+        DirectoryIndex  index.html
+        Order  allow,  deny
+        Allow  from  all
+      &lt;/Directory>
+      
+      Restart Apache Web Server (httpd)
+      # service  httpd  restart
+      
+      Copy minimum file / folders to /opl-test
+      # cd  /opl-test
+      # cp  /opl/OpenLayers.js  ./
+      # cp  -R  /opl/img  ./
+      # cp  -R  /opl/theme  ./
+      
+      Write ex-xx.html in /opl-test and test with browser to http://localhost/opl-test
+
+    - 2012-04-11 02:33:13.204632
+    - 2012-04-11 02:37:22.673505
+  - - 56
+    - postgresql.conf
+    - art
+    - |-
+      Performance tuning in 9.1 is changed from 8.x
+      
+      <font color='red' size='4'></b>http://wiki.postgresql.org/wiki/Tuning_Your_PostgreSQL_Server</b></font>
+      
+      
+      # -----------------------------
+      # PostgreSQL configuration file
+      # -----------------------------
+      #
+      # This file consists of lines of the form:
+      #
+      #   name = value
+      #
+      # (The "=" is optional.)  Whitespace may be used.  Comments are introduced with
+      # "#" anywhere on a line.  The complete list of parameter names and allowed
+      # values can be found in the PostgreSQL documentation.
+      #
+      # The commented-out settings shown in this file represent the default values.
+      # Re-commenting a setting is NOT sufficient to revert it to the default value;
+      # you need to reload the server.
+      #
+      # This file is read on server startup and when the server receives a SIGHUP
+      # signal.  If you edit the file on a running system, you have to SIGHUP the
+      # server for the changes to take effect, or use "pg_ctl reload".  Some
+      # parameters, which are marked below, require a server shutdown and restart to
+      # take effect.
+      #
+      # Any parameter can also be given as a command-line option to the server, e.g.,
+      # "postgres -c log_connections=on".  Some parameters can be changed at run time
+      # with the "SET" SQL command.
+      #
+      # Memory units:  kB = kilobytes        Time units:  ms  = milliseconds
+      #                MB = megabytes                     s   = seconds
+      #                GB = gigabytes                     min = minutes
+      #                                                   h   = hours
+      #                                                   d   = days
+      
+      
+      #------------------------------------------------------------------------------
+      # FILE LOCATIONS
+      #------------------------------------------------------------------------------
+      
+      # The default values of these variables are driven from the -D command-line
+      # option or PGDATA environment variable, represented here as ConfigDir.
+      
+      #data_directory = 'ConfigDir'		# use data in another directory
+      					# (change requires restart)
+      #hba_file = 'ConfigDir/pg_hba.conf'	# host-based authentication file
+      					# (change requires restart)
+      #ident_file = 'ConfigDir/pg_ident.conf'	# ident configuration file
+      					# (change requires restart)
+      
+      # If external_pid_file is not explicitly set, no extra PID file is written.
+      #external_pid_file = '(none)'		# write an extra PID file
+      					# (change requires restart)
+      
+      
+      #------------------------------------------------------------------------------
+      # CONNECTIONS AND AUTHENTICATION
+      #------------------------------------------------------------------------------
+      
+      # - Connection Settings -
+      
+      #listen_addresses = 'localhost'		# what IP address(es) to listen on;
+      					# comma-separated list of addresses;
+      					# defaults to 'localhost', '*' = all
+      					# (change requires restart)
+      #port = 5432				# (change requires restart)
+      max_connections = 100			# (change requires restart)
+      # Note:  Increasing max_connections costs ~400 bytes of shared memory per
+      # connection slot, plus lock space (see max_locks_per_transaction).
+      #superuser_reserved_connections = 3	# (change requires restart)
+      #unix_socket_directory = ''		# (change requires restart)
+      #unix_socket_group = ''			# (change requires restart)
+      #unix_socket_permissions = 0777		# begin with 0 to use octal notation
+      					# (change requires restart)
+      #bonjour = off				# advertise server via Bonjour
+      					# (change requires restart)
+      #bonjour_name = ''			# defaults to the computer name
+      					# (change requires restart)
+      
+      # - Security and Authentication -
+      
+      #authentication_timeout = 1min		# 1s-600s
+      #ssl = off				# (change requires restart)
+      #ssl_ciphers = 'ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH'	# allowed SSL ciphers
+      					# (change requires restart)
+      #ssl_renegotiation_limit = 512MB	# amount of data between renegotiations
+      #password_encryption = on
+      #db_user_namespace = off
+      
+      # Kerberos and GSSAPI
+      #krb_server_keyfile = ''
+      #krb_srvname = 'postgres'		# (Kerberos only)
+      #krb_caseins_users = off
+      
+      # - TCP Keepalives -
+      # see "man 7 tcp" for details
+      
+      #tcp_keepalives_idle = 0		# TCP_KEEPIDLE, in seconds;
+      					# 0 selects the system default
+      #tcp_keepalives_interval = 0		# TCP_KEEPINTVL, in seconds;
+      					# 0 selects the system default
+      #tcp_keepalives_count = 0		# TCP_KEEPCNT;
+      					# 0 selects the system default
+      
+      
+      #------------------------------------------------------------------------------
+      # RESOURCE USAGE (except WAL)
+      #------------------------------------------------------------------------------
+      
+      # - Memory -
+      
+      #shared_buffers = 24MB			# min 128kB
+      shared_buffers = 640MB			# min 128kB
+      					# (change requires restart)
+      #temp_buffers = 8MB			# min 800kB
+      #max_prepared_transactions = 0		# zero disables the feature
+      					# (change requires restart)
+      # Note:  Increasing max_prepared_transactions costs ~600 bytes of shared memory
+      # per transaction slot, plus lock space (see max_locks_per_transaction).
+      # It is not advisable to set max_prepared_transactions nonzero unless you
+      # actively intend to use prepared transactions.
+      #work_mem = 1MB				# min 64kB
+      #maintenance_work_mem = 16MB		# min 1MB
+      #max_stack_depth = 2MB			# min 100kB
+      
+      # - Kernel Resource Usage -
+      
+      #max_files_per_process = 1000		# min 25
+      					# (change requires restart)
+      #shared_preload_libraries = ''		# (change requires restart)
+      
+      # - Cost-Based Vacuum Delay -
+      
+      #vacuum_cost_delay = 0ms		# 0-100 milliseconds
+      #vacuum_cost_page_hit = 1		# 0-10000 credits
+      #vacuum_cost_page_miss = 10		# 0-10000 credits
+      #vacuum_cost_page_dirty = 20		# 0-10000 credits
+      #vacuum_cost_limit = 200		# 1-10000 credits
+      
+      # - Background Writer -
+      
+      #bgwriter_delay = 200ms			# 10-10000ms between rounds
+      #bgwriter_lru_maxpages = 100		# 0-1000 max buffers written/round
+      #bgwriter_lru_multiplier = 2.0		# 0-10.0 multipler on buffers scanned/round
+      
+      # - Asynchronous Behavior -
+      
+      #effective_io_concurrency = 1		# 1-1000. 0 disables prefetching
+      
+      
+      #------------------------------------------------------------------------------
+      # WRITE AHEAD LOG
+      #------------------------------------------------------------------------------
+      
+      # - Settings -
+      
+      #wal_level = minimal			# minimal, archive, or hot_standby
+      					# (change requires restart)
+      #fsync = on				# turns forced synchronization on or off
+      #synchronous_commit = on		# synchronization level; on, off, or local
+      #wal_sync_method = fsync		# the default is the first option
+      					# supported by the operating system:
+      					#   open_datasync
+      					#   fdatasync (default on Linux)
+      					#   fsync
+      					#   fsync_writethrough
+      					#   open_sync
+      #full_page_writes = on			# recover from partial page writes
+      #wal_buffers = -1			# min 32kB, -1 sets based on shared_buffers
+      					# (change requires restart)
+      #wal_writer_delay = 200ms		# 1-10000 milliseconds
+      
+      #commit_delay = 0			# range 0-100000, in microseconds
+      #commit_siblings = 5			# range 1-1000
+      
+      # - Checkpoints -
+      
+      #checkpoint_segments = 3		# in logfile segments, min 1, 16MB each
+      #checkpoint_timeout = 5min		# range 30s-1h
+      #checkpoint_completion_target = 0.5	# checkpoint target duration, 0.0 - 1.0
+      #checkpoint_warning = 30s		# 0 disables
+      
+      # - Archiving -
+      
+      #archive_mode = off		# allows archiving to be done
+      				# (change requires restart)
+      #archive_command = ''		# command to use to archive a logfile segment
+      #archive_timeout = 0		# force a logfile segment switch after this
+      				# number of seconds; 0 disables
+      
+      
+      #------------------------------------------------------------------------------
+      # REPLICATION
+      #------------------------------------------------------------------------------
+      
+      # - Master Server -
+      
+      # These settings are ignored on a standby server
+      
+      #max_wal_senders = 0		# max number of walsender processes
+      				# (change requires restart)
+      #wal_sender_delay = 1s		# walsender cycle time, 1-10000 milliseconds
+      #wal_keep_segments = 0		# in logfile segments, 16MB each; 0 disables
+      #vacuum_defer_cleanup_age = 0	# number of xacts by which cleanup is delayed
+      #replication_timeout = 60s	# in milliseconds; 0 disables
+      #synchronous_standby_names = ''	# standby servers that provide sync rep
+      				# comma-separated list of application_name
+      				# from standby(s); '*' = all
+      
+      # - Standby Servers -
+      
+      # These settings are ignored on a master server
+      
+      #hot_standby = off			# "on" allows queries during recovery
+      					# (change requires restart)
+      #max_standby_archive_delay = 30s	# max delay before canceling queries
+      					# when reading WAL from archive;
+      					# -1 allows indefinite delay
+      #max_standby_streaming_delay = 30s	# max delay before canceling queries
+      					# when reading streaming WAL;
+      					# -1 allows indefinite delay
+      #wal_receiver_status_interval = 10s	# send replies at least this often
+      					# 0 disables
+      #hot_standby_feedback = off		# send info from standby to prevent
+      					# query conflicts
+      
+      
+      #------------------------------------------------------------------------------
+      # QUERY TUNING
+      #------------------------------------------------------------------------------
+      
+      # - Planner Method Configuration -
+      
+      #enable_bitmapscan = on
+      #enable_hashagg = on
+      #enable_hashjoin = on
+      #enable_indexscan = on
+      #enable_material = on
+      #enable_mergejoin = on
+      #enable_nestloop = on
+      #enable_seqscan = on
+      #enable_sort = on
+      #enable_tidscan = on
+      
+      # - Planner Cost Constants -
+      
+      #seq_page_cost = 1.0			# measured on an arbitrary scale
+      #random_page_cost = 4.0			# same scale as above
+      #cpu_tuple_cost = 0.01			# same scale as above
+      #cpu_index_tuple_cost = 0.005		# same scale as above
+      #cpu_operator_cost = 0.0025		# same scale as above
+      #effective_cache_size = 128MB
+      effective_cache_size = 1792MB
+      
+      # - Genetic Query Optimizer -
+      
+      #geqo = on
+      #geqo_threshold = 12
+      #geqo_effort = 5			# range 1-10
+      #geqo_pool_size = 0			# selects default based on effort
+      #geqo_generations = 0			# selects default based on effort
+      #geqo_selection_bias = 2.0		# range 1.5-2.0
+      #geqo_seed = 0.0			# range 0.0-1.0
+      
+      # - Other Planner Options -
+      
+      #default_statistics_target = 100	# range 1-10000
+      #constraint_exclusion = partition	# on, off, or partition
+      #cursor_tuple_fraction = 0.1		# range 0.0-1.0
+      #from_collapse_limit = 8
+      #join_collapse_limit = 8		# 1 disables collapsing of explicit
+      					# JOIN clauses
+      
+      
+      #------------------------------------------------------------------------------
+      # ERROR REPORTING AND LOGGING
+      #------------------------------------------------------------------------------
+      
+      # - Where to Log -
+      
+      #log_destination = 'stderr'		# Valid values are combinations of
+      					# stderr, csvlog, syslog, and eventlog,
+      					# depending on platform.  csvlog
+      					# requires logging_collector to be on.
+      
+      # This is used when logging to stderr:
+      logging_collector = on			# Enable capturing of stderr and csvlog
+      					# into log files. Required to be on for
+      					# csvlogs.
+      					# (change requires restart)
+      
+      # These are only used if logging_collector is on:
+      #log_directory = 'pg_log'		# directory where log files are written,
+      					# can be absolute or relative to PGDATA
+      log_filename = 'postgresql-%a.log'	# log file name pattern,
+      					# can include strftime() escapes
+      #log_file_mode = 0600			# creation mode for log files,
+      					# begin with 0 to use octal notation
+      log_truncate_on_rotation = on		# If on, an existing log file with the
+      					# same name as the new log file will be
+      					# truncated rather than appended to.
+      					# But such truncation only occurs on
+      					# time-driven rotation, not on restarts
+      					# or size-driven rotation.  Default is
+      					# off, meaning append to existing files
+      					# in all cases.
+      log_rotation_age = 1d			# Automatic rotation of logfiles will
+      					# happen after that time.  0 disables.
+      log_rotation_size = 0			# Automatic rotation of logfiles will
+      					# happen after that much log output.
+      					# 0 disables.
+      
+      # These are relevant when logging to syslog:
+      #syslog_facility = 'LOCAL0'
+      #syslog_ident = 'postgres'
+      
+      #silent_mode = off			# Run server silently.
+      					# DO NOT USE without syslog or
+      					# logging_collector
+      					# (change requires restart)
+      
+      
+      # - When to Log -
+      
+      #client_min_messages = notice		# values in order of decreasing detail:
+      					#   debug5
+      					#   debug4
+      					#   debug3
+      					#   debug2
+      					#   debug1
+      					#   log
+      					#   notice
+      					#   warning
+      					#   error
+      
+      #log_min_messages = warning		# values in order of decreasing detail:
+      					#   debug5
+      					#   debug4
+      					#   debug3
+      					#   debug2
+      					#   debug1
+      					#   info
+      					#   notice
+      					#   warning
+      					#   error
+      					#   log
+      					#   fatal
+      					#   panic
+      
+      #log_min_error_statement = error	# values in order of decreasing detail:
+      				 	#   debug5
+      					#   debug4
+      					#   debug3
+      					#   debug2
+      					#   debug1
+      				 	#   info
+      					#   notice
+      					#   warning
+      					#   error
+      					#   log
+      					#   fatal
+      					#   panic (effectively off)
+      
+      #log_min_duration_statement = -1	# -1 is disabled, 0 logs all statements
+      					# and their durations, > 0 logs only
+      					# statements running at least this number
+      					# of milliseconds
+      
+      
+      # - What to Log -
+      
+      #debug_print_parse = off
+      #debug_print_rewritten = off
+      #debug_print_plan = off
+      #debug_pretty_print = on
+      #log_checkpoints = off
+      #log_connections = off
+      #log_disconnections = off
+      #log_duration = off
+      #log_error_verbosity = default		# terse, default, or verbose messages
+      #log_hostname = off
+      #log_line_prefix = ''			# special values:
+      					#   %a = application name
+      					#   %u = user name
+      					#   %d = database name
+      					#   %r = remote host and port
+      					#   %h = remote host
+      					#   %p = process ID
+      					#   %t = timestamp without milliseconds
+      					#   %m = timestamp with milliseconds
+      					#   %i = command tag
+      					#   %e = SQL state
+      					#   %c = session ID
+      					#   %l = session line number
+      					#   %s = session start timestamp
+      					#   %v = virtual transaction ID
+      					#   %x = transaction ID (0 if none)
+      					#   %q = stop here in non-session
+      					#        processes
+      					#   %% = '%'
+      					# e.g. '<%u%%%d> '
+      #log_lock_waits = off			# log lock waits >= deadlock_timeout
+      #log_statement = 'none'			# none, ddl, mod, all
+      #log_temp_files = -1			# log temporary files equal or larger
+      					# than the specified size in kilobytes;
+      					# -1 disables, 0 logs all temp files
+      #log_timezone = '(defaults to server environment setting)'
+      
+      
+      #------------------------------------------------------------------------------
+      # RUNTIME STATISTICS
+      #------------------------------------------------------------------------------
+      
+      # - Query/Index Statistics Collector -
+      
+      #track_activities = on
+      #track_counts = on
+      #track_functions = none			# none, pl, all
+      #track_activity_query_size = 1024 	# (change requires restart)
+      #update_process_title = on
+      #stats_temp_directory = 'pg_stat_tmp'
+      
+      
+      # - Statistics Monitoring -
+      
+      #log_parser_stats = off
+      #log_planner_stats = off
+      #log_executor_stats = off
+      #log_statement_stats = off
+      
+      
+      #------------------------------------------------------------------------------
+      # AUTOVACUUM PARAMETERS
+      #------------------------------------------------------------------------------
+      
+      #autovacuum = on			# Enable autovacuum subprocess?  'on'
+      					# requires track_counts to also be on.
+      #log_autovacuum_min_duration = -1	# -1 disables, 0 logs all actions and
+      					# their durations, > 0 logs only
+      					# actions running at least this number
+      					# of milliseconds.
+      #autovacuum_max_workers = 3		# max number of autovacuum subprocesses
+      					# (change requires restart)
+      #autovacuum_naptime = 1min		# time between autovacuum runs
+      #autovacuum_vacuum_threshold = 50	# min number of row updates before
+      					# vacuum
+      #autovacuum_analyze_threshold = 50	# min number of row updates before
+      					# analyze
+      #autovacuum_vacuum_scale_factor = 0.2	# fraction of table size before vacuum
+      #autovacuum_analyze_scale_factor = 0.1	# fraction of table size before analyze
+      #autovacuum_freeze_max_age = 200000000	# maximum XID age before forced vacuum
+      					# (change requires restart)
+      #autovacuum_vacuum_cost_delay = 20ms	# default vacuum cost delay for
+      					# autovacuum, in milliseconds;
+      					# -1 means use vacuum_cost_delay
+      #autovacuum_vacuum_cost_limit = -1	# default vacuum cost limit for
+      					# autovacuum, -1 means use
+      					# vacuum_cost_limit
+      
+      
+      #------------------------------------------------------------------------------
+      # CLIENT CONNECTION DEFAULTS
+      #------------------------------------------------------------------------------
+      
+      # - Statement Behavior -
+      
+      #search_path = '"$user",public'		# schema names
+      #default_tablespace = ''		# a tablespace name, '' uses the default
+      #temp_tablespaces = ''			# a list of tablespace names, '' uses
+      					# only default tablespace
+      #check_function_bodies = on
+      #default_transaction_isolation = 'read committed'
+      #default_transaction_read_only = off
+      #default_transaction_deferrable = off
+      #session_replication_role = 'origin'
+      #statement_timeout = 0			# in milliseconds, 0 is disabled
+      #vacuum_freeze_min_age = 50000000
+      #vacuum_freeze_table_age = 150000000
+      #bytea_output = 'hex'			# hex, escape
+      #xmlbinary = 'base64'
+      #xmloption = 'content'
+      
+      # - Locale and Formatting -
+      
+      datestyle = 'iso, mdy'
+      #intervalstyle = 'postgres'
+      #timezone = '(defaults to server environment setting)'
+      #timezone_abbreviations = 'Default'     # Select the set of available time zone
+      					# abbreviations.  Currently, there are
+      					#   Default
+      					#   Australia
+      					#   India
+      					# You can create your own file in
+      					# share/timezonesets/.
+      #extra_float_digits = 0			# min -15, max 3
+      #client_encoding = sql_ascii		# actually, defaults to database
+      					# encoding
+      
+      # These settings are initialized by initdb, but they can be changed.
+      lc_messages = 'th_TH.UTF-8'			# locale for system error message
+      					# strings
+      lc_monetary = 'th_TH.UTF-8'			# locale for monetary formatting
+      lc_numeric = 'th_TH.UTF-8'			# locale for number formatting
+      lc_time = 'th_TH.UTF-8'				# locale for time formatting
+      
+      # default configuration for text search
+      default_text_search_config = 'pg_catalog.simple'
+      
+      # - Other Defaults -
+      
+      #dynamic_library_path = '$libdir'
+      #local_preload_libraries = ''
+      
+      
+      #------------------------------------------------------------------------------
+      # LOCK MANAGEMENT
+      #------------------------------------------------------------------------------
+      
+      #deadlock_timeout = 1s
+      #max_locks_per_transaction = 64		# min 10
+      					# (change requires restart)
+      # Note:  Each lock table slot uses ~270 bytes of shared memory, and there are
+      # max_locks_per_transaction * (max_connections + max_prepared_transactions)
+      # lock table slots.
+      #max_pred_locks_per_transaction = 64	# min 10
+      					# (change requires restart)
+      
+      #------------------------------------------------------------------------------
+      # VERSION/PLATFORM COMPATIBILITY
+      #------------------------------------------------------------------------------
+      
+      # - Previous PostgreSQL Versions -
+      
+      #array_nulls = on
+      #backslash_quote = safe_encoding	# on, off, or safe_encoding
+      #default_with_oids = off
+      #escape_string_warning = on
+      #lo_compat_privileges = off
+      #quote_all_identifiers = off
+      #sql_inheritance = on
+      #standard_conforming_strings = on
+      #synchronize_seqscans = on
+      
+      # - Other Platforms and Clients -
+      
+      #transform_null_equals = off
+      
+      
+      #------------------------------------------------------------------------------
+      # ERROR HANDLING
+      #------------------------------------------------------------------------------
+      
+      #exit_on_error = off				# terminate session on any error?
+      #restart_after_crash = on			# reinitialize after backend crash?
+      
+      
+      #------------------------------------------------------------------------------
+      # CUSTOMIZED OPTIONS
+      #------------------------------------------------------------------------------
+      
+      #custom_variable_classes = ''		# list of custom variable class names
+    - 2012-04-12 08:44:53.264795
+    - 2012-04-14 03:22:29.843109
+  - - 57
+    - mongodb
+    - commands
+    - |
+      Copy Database
+      > db.copyDatabase(from, to, host)
+      
+      > db.copyDatabase('set50', 'stock')
+      
+      Rename collections
+      > db.renameCollection('new name')
+      > use stock
+      > db.setindex.renameCollection('setcloses')
+
+    - 2012-04-14 03:23:43.470487
+    - 2012-04-14 04:39:19.585163
+  - - 58
+    - RAILS,mongodb,highcharts
+    - Make Chart with Rails + MongoDB on Windows
+    - |-
+      o Install Ruby193
+      o <a href="http://203.157.20.211:3003/kbs/7">Install DevKit</a>
+      o Install rails 3.1.3
+      
+      Required gems
+      C:> gem install nifty-generators --platform=ruby
+      C:> gem install mongo --platform=ruby
+      C:> gem install bson_ext --platform=ruby
+      C:> gem install mongoid --platform=ruby
+      C:> gem install kaminari --platform=ruby
+      
+      Create new rails project
+      C:> rails new stock -T -O --skip-bundle
+      # -T = no Test
+      # -O = no activerecord -> use mongodb (db:stock collection:setcloses)
+      C:> cd stock
+      
+      Edit Gemfile
+      C:> EDIT Gemfile
+      source 'http://rubygems.org'
+      
+      gem 'rails', '3.1.3'
+      
+      group :assets do
+        gem 'sass-rails',   '~> 3.1.5'
+        gem 'coffee-rails', '~> 3.1.1'
+        gem 'uglifier', '>= 1.0.3'
+      end
+      
+      gem 'jquery-rails'
+      
+      gem 'nifty-generators'
+      gem 'bson_ext'
+      gem 'mongoid'
+      gem 'kaminari'
+      gem "mocha", :group => :test
+      
+      Install additional gems
+      C:> bundle
+      
+      Generate mongoid configuration
+      C:> rails g mongoid:config
+      Mongoid config not found. Create a config file at: config/mongoid.yml
+      to generate one run: rails generate mongoid:config
+      
+            create  config/mongoid.yml
+      
+      Change database to stock (mongodb on Windows)
+      C:> EDIT config/mongoid.yml
+      development:
+        host: localhost
+        database: stock
+      ...
+      
+      Generate nifty configuration
+      C:> rails g nifty:config
+            create  config/initializers/load_app_config.rb
+            create  config/app_config.yml
+      
+      C:>rails g nifty:layout
+          conflict  app/views/layouts/application.html.erb
+      Overwrite D:/rails/stock/app/views/layouts/application.html.erb? (enter "h" for help) [Ynaqdh] a
+             force  app/views/layouts/application.html.erb
+            create  public/stylesheets/application.css
+            create  app/helpers/layout_helper.rb
+            create  app/helpers/error_messages_helper.rb
+      
+      Generate scaffold setclose
+      C:>rails g scaffold setclose date:string time:string close:float volume:integer value:integer --skip-timestamps
+      
+      Copy application.css generated from nifty to app/assets/stylesheets (Rails Version 3.x)
+      C:>copy public\stylesheets\application.css app\assets\stylesheets
+      Overwrite app\assets\stylesheets\application.css? (Yes/No/All): a
+              1 file(s) copied.
+      
+      Test with browser
+      C:> rails s
+      Browser: http://localhost:3000/setcloses
+      
+      Add pagination
+      C:> rails g kaminari:config
+            create  config/initializers/kaminari_config.rb
+      C:>EDIT config/initializers/kaminari_config.rb
+      Kaminari.configure do |config|
+        config.default_per_page = 10
+      end
+      
+      Edit setcloses controller add pagination
+      C:> EDIT app/controllers/setcloses_controller,rb
+      ...
+      def index
+        @setcloses = Setclose.page(params[:page])
+      end
+      
+      Edit index view of setcloses add pagination
+      C:> EDIT app/views/setcloses/index.html.erb
+      &lt;h1>Listing setcloses</h1>
+      &lt;%= paginate @setcloses %>
+      &lt;p>
+      &lt;table>
+      ... 
+      
+      ERROR:
+      destroy button won't delete record!! -> :defaults change to "application"
+      C:> EDIT app/views/layouts/application.html.erb
+      ...
+      &lt;%= javascript_include_tag "application" %>
+      
+      Refresh browser and destroy button works!
+      
+      Add highcharts to draw chart before index list of 10 records
+      
+      Download required javascripts
+      o COPY jquery-1.7.2.min.js to app/assets/javascripts
+      C:> curl -o app\assets\javascripts\jquery-1.7.2.min.js ftp://203.157.20.211/kbase/jquery-1.7.2.min.js
+      
+      o COPY rails.js to app/assets/javascripts
+      C:> curl -o app\assets\javascripts\rails.js ftp://203.157.20.211/kbase/rails.js
+      
+      o COPY highcharts.js to app/assets/javascripts
+      C:> curl -o app\assets\javascripts\highcharts.js ftp://203.157.20.211/kbase/highcharts.js
+      
+      Change order of javascripts in application's layout file
+      C:> EDIT app\views\layouts\application.html.erb
+      ...
+      &lt;%= javascript_include_tag "jquery-1.7.2.min", "rails", "highcharts" %>
+      
+      Add highchart &lt;div> to index view of setcloses resource
+      C:> EDIT app\views\setcloses\index.html.erb
+      &lt;h1>Listing setcloses&lt;/h1>
+      
+      &lt;script type="text/javascript" charset="utf-8">
+      $(function(){
+        new Highcharts.Chart({
+          chart: {
+            renderTo: "setcloses_chart"
+          }
+          ,title: {
+            text: "SET Index"
+          }
+          ,xAxis: {
+            categories: <font color='green'><b>&lt;%= raw @setcloses.map { |d| d['time'] } %></b></font>
+            ,labels: {
+              align: 'center'
+              ,step: 1
+      	,rotation: 315
+      	,y: 20
+            }
+          }
+          ,yAxis: {
+            title: {
+              text: "Points"
+            }
+          }
+          ,series: [{
+            data: <font color='green'><b>&lt;%= @setcloses.map { |d| d.close } %></b></font>
+          }]
+        });
+      });
+      &lt;/script>
+      &lt;div id="setcloses_chart" style="width:560px; height:300px;">&lt;/div>
+      ...
+    - 2012-04-14 03:31:55.615926
+    - 2012-04-14 04:37:47.507284
+  - - 59
+    - mongodb,analyse
+    - create-analyses-from-quote.rb
+    - |
+      #!C:\Ruby193\bin\ruby.exe
+      
+      require 'rubygems'
+      require 'mongo'
+      
+      def insert_analyses(con,date,time,sym,perc_volume,close,change)
+      	db = con['stock']
+      	coll = db['analyses']
+        doc = {
+      		:date => date,
+      		:time => time,
+      		:symbol => sym,
+      		:perc_volume => perc_volume,
+      		:close => close,
+      		:change => change
+      	}
+      	coll.insert(doc)
+      end
+      
+      t = Time.now
+      yy = t.year
+      mm = sprintf("%02d", t.mon)
+      dd = sprintf("%02d", t.day)
+      date = "#{yy}#{mm}#{dd}"
+      
+      con = Mongo::Connection.new("127.0.0.1")
+      db = con['stock']
+      coll = db['quotes']
+      tms = coll.distinct('time',{'date' => date}).sort()
+      time = tms.last
+      res = coll.find({'date' => date, 'time' => time}).sort(['perc_volume',-1]).limit(10)
+      res.each do |doc|
+        id = doc['_id']
+        date = doc['date']
+        time = doc['time']
+        sym = doc['symbol']
+      	perc_volume = doc['perc_volume']
+        close = doc['close']
+        change = doc['change']
+        insert_analyses(con,date,time,sym,perc_volume,close,change)
+      end
+
+    - 2012-04-15 10:07:36.613832
+    - 2012-04-15 10:07:36.613832
+  - - 60
+    - openlayers,wms
+    - GETCAPABILITIES request
+    - |
+      http://vmap0.tiles.osgeo.org/wms/vmap0?SERVICE=WMS&REQUEST=GETCAPABILITIES
+      
+      &lt;?xml version='1.0' encoding="ISO-8859-1" standalone="no" ?>
+      &lt;!DOCTYPE WMT_MS_Capabilities SYSTEM "http://schemas.opengis.net/wms/1.1.1/WMS_MS_Capabilities.dtd"
+       [
+       &lt;!ELEMENT VendorSpecificCapabilities EMPTY>
+       ]>  &lt;!-- end of DOCTYPE declaration -->
+      
+      &lt;WMT_MS_Capabilities version="1.1.1">
+      
+      &lt;!-- MapServer version 5.0.3 OUTPUT=GIF OUTPUT=PNG OUTPUT=JPEG OUTPUT=WBMP OUTPUT=SVG SUPPORTS=PROJ SUPPORTS=AGG SUPPORTS=FREETYPE SUPPORTS=WMS_SERVER SUPPORTS=WMS_CLIENT SUPPORTS=WFS_SERVER SUPPORTS=WFS_CLIENT SUPPORTS=WCS_SERVER SUPPORTS=FASTCGI SUPPORTS=THREADS SUPPORTS=GEOS INPUT=EPPL7 INPUT=POSTGIS INPUT=OGR INPUT=GDAL INPUT=SHAPEFILE -->
+      
+      &lt;Service>
+        &lt;Name>OGC:WMS&lt;/Name>
+        &lt;Title>Metacarta WMS VMaplv0&lt;/Title>
+        &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>
+        &lt;ContactInformation>
+        &lt;/ContactInformation>
+      &lt;/Service>
+      
+      &lt;Capability>
+        &lt;Request>
+          &lt;GetCapabilities>
+            &lt;Format>application/vnd.ogc.wms_xml&lt;/Format>
+            &lt;DCPType>
+              &lt;HTTP>
+                &lt;Get>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Get>
+                &lt;Post>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Post>
+              &lt;/HTTP>
+            &lt;/DCPType>
+          &lt;/GetCapabilities>
+          &lt;GetMap>
+            &lt;Format>image/jpeg&lt;/Format>
+            &lt;Format>image/png&lt;/Format>
+            &lt;Format>image/gif&lt;/Format>
+            &lt;Format>image/png; mode=24bit&lt;/Format>
+            &lt;Format>image/wbmp&lt;/Format>
+            &lt;Format>image/tiff&lt;/Format>
+            &lt;Format>image/svg+xml&lt;/Format>
+            &lt;DCPType>
+              &lt;HTTP>
+                &lt;Get>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Get>
+                &lt;Post>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Post>
+              &lt;/HTTP>
+            &lt;/DCPType>
+          &lt;/GetMap>
+          &lt;GetFeatureInfo>
+            &lt;Format>text/plain&lt;/Format>
+            &lt;Format>application/vnd.ogc.gml&lt;/Format>
+            &lt;DCPType>
+              &lt;HTTP>
+                &lt;Get>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Get>
+                &lt;Post>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Post>
+              &lt;/HTTP>
+            &lt;/DCPType>
+          &lt;/GetFeatureInfo>
+          &lt;DescribeLayer>
+            &lt;Format>text/xml&lt;/Format>
+            &lt;DCPType>
+              &lt;HTTP>
+                &lt;Get>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Get>
+                &lt;Post>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Post>
+              &lt;/HTTP>
+            &lt;/DCPType>
+          &lt;/DescribeLayer>
+          &lt;GetLegendGraphic>
+            &lt;Format>image/jpeg&lt;/Format>
+            &lt;Format>image/png&lt;/Format>
+            &lt;Format>image/gif&lt;/Format>
+            &lt;Format>image/png; mode=24bit&lt;/Format>
+            &lt;Format>image/wbmp&lt;/Format>
+            &lt;DCPType>
+              &lt;HTTP>
+                &lt;Get>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Get>
+                &lt;Post>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Post>
+              &lt;/HTTP>
+            &lt;/DCPType>
+          &lt;/GetLegendGraphic>
+          &lt;GetStyles>
+            &lt;Format>text/xml&lt;/Format>
+            &lt;DCPType>
+              &lt;HTTP>
+                &lt;Get>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Get>
+                &lt;Post>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Post>
+              &lt;/HTTP>
+            &lt;/DCPType>
+          &lt;/GetStyles>
+        &lt;/Request>
+        &lt;Exception>
+          &lt;Format>application/vnd.ogc.se_xml&lt;/Format>
+          &lt;Format>application/vnd.ogc.se_inimage&lt;/Format>
+          &lt;Format>application/vnd.ogc.se_blank&lt;/Format>
+        &lt;/Exception>
+        &lt;VendorSpecificCapabilities />
+        &lt;UserDefinedSymbolization SupportSLD="1" UserLayer="0" UserStyle="1" RemoteWFS="0"/>
+        &lt;Layer>
+          &lt;Name>Vmap0&lt;/Name>
+          &lt;Title>Metacarta WMS VMaplv0&lt;/Title>
+          &lt;SRS>EPSG:4269&lt;/SRS>
+          &lt;SRS>EPSG:4326&lt;/SRS>
+          &lt;SRS>EPSG:900913&lt;/SRS>
+          &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="90" />
+          &lt;Layer>
+            &lt;Name>basic&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._GROUP_TITLE' was missing in this context. -->
+            &lt;Title>basic&lt;/Title>
+            &lt;Abstract>basic&lt;/Abstract>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>ocean&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>ocean&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>ground_01&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>ground_01&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="90" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=ground_01&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="11973.6683623113" max="0" />
+              &lt;!-- WARNING: Only MINSCALEDENOM and no MAXSCALEDENOM specified in the mapfile. A default value of 0 has been returned for the Max ScaleHint but this is probably not what you want. -->
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>ground_02&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>ground_02&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="83.6274" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=ground_02&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="11973.6683623113" />
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>population&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>population&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-179.13" miny="-53.1674" maxx="178.443" maxy="70.9927" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=population&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="5986.83418115564" />
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>river&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>river&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="90" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=river&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="299.341709057782" />
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>stateboundary&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>stateboundary&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-139.053" miny="-49.1398" maxx="178.043" maxy="81.6552" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=stateboundary&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="23947.3367246226" />
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>country_01&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>country_01&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="90" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=country_01&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>country_02&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>country_02&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-55.1943" maxx="180" maxy="72.0051" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=country_02&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>disp&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>disp&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-168.976" miny="3.97549" maxx="80.3432" maxy="68.0063" />
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>inwater&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>inwater&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-179.999" miny="-70.9173" maxx="179.999" maxy="83.576" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=inwater&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="11973.6683623113" />
+            &lt;/Layer>
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>coastline_01&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>coastline_01&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="90" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=coastline_01&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="11973.6683623113" max="0" />
+              &lt;!-- WARNING: Only MINSCALEDENOM and no MAXSCALEDENOM specified in the mapfile. A default value of 0 has been returned for the Max ScaleHint but this is probably not what you want. -->
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>coastline_02&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>coastline_02&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-85.5828" maxx="180" maxy="83.6274" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=coastline_02&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="11973.6683623113" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>depthcontour&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>depthcontour&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-78.1118" maxx="180" maxy="89.9187" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=depthcontour&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="17960.5025434669" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>priroad&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>priroad&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-174.009" miny="-54.7939" maxx="178.564" maxy="70.4843" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=priroad&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>secroad&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>secroad&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-179.999" miny="-54.888" maxx="179.999" maxy="74.7406" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=secroad&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="124.725712107409" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>rail&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>rail&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-165.245" miny="-53.1384" maxx="179.61" maxy="78.168" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=rail&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="124.725712107409" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>ferry&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>ferry&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-126.191" miny="-41.8292" maxx="175.15" maxy="69.6709" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=ferry&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="1197.36683623113" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>tunnel&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>tunnel&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-148.866" miny="-50.3083" maxx="177.891" maxy="67.2178" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=tunnel&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="598.683418115565" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>bridge&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>bridge&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-149.703" miny="-43.5104" maxx="179.452" maxy="69.6586" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=bridge&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="598.683418115565" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>trail&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>trail&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-179.999" miny="-47.1622" maxx="179.999" maxy="77.224" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=trail&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="179.605025434669" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>CAUSE&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>CAUSE&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-96.5515" miny="-32.2882" maxx="127.912" maxy="58.5718" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=CAUSE&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="598.683418115565" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>clabel&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>clabel&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="83.6236" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>statelabel&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>statelabel&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="83.6236" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>ctylabel&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>ctylabel&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-165.27" miny="-53.15" maxx="177.13" maxy="78.2" />
+          &lt;/Layer>
+        &lt;/Layer>
+      &lt;/Capability>
+      &lt;/WMT_MS_Capabilities>
+
+    - 2012-04-16 10:57:43.732790
+    - 2012-04-16 10:57:43.732790
+  - - 61
+    - openlayers,wms
+    - GETCAPABILITIES request
+    - |
+      http://labs.metacarta.com/wms/vmap0?SERVICE=WMS&REQUEST=GETCAPABILITIES
+      
+      
+      &lt;?xml version='1.0' encoding="ISO-8859-1" standalone="no" ?>
+      &lt;!DOCTYPE WMT_MS_Capabilities SYSTEM "http://schemas.opengis.net/wms/1.1.1/WMS_MS_Capabilities.dtd"
+       [
+       &lt;!ELEMENT VendorSpecificCapabilities EMPTY>
+       ]>  &lt;!-- end of DOCTYPE declaration -->
+      
+      &lt;WMT_MS_Capabilities version="1.1.1">
+      
+      &lt;!-- MapServer version 5.0.3 OUTPUT=GIF OUTPUT=PNG OUTPUT=JPEG OUTPUT=WBMP OUTPUT=SVG SUPPORTS=PROJ SUPPORTS=AGG SUPPORTS=FREETYPE SUPPORTS=WMS_SERVER SUPPORTS=WMS_CLIENT SUPPORTS=WFS_SERVER SUPPORTS=WFS_CLIENT SUPPORTS=WCS_SERVER SUPPORTS=FASTCGI SUPPORTS=THREADS SUPPORTS=GEOS INPUT=EPPL7 INPUT=POSTGIS INPUT=OGR INPUT=GDAL INPUT=SHAPEFILE -->
+      
+      &lt;Service>
+        &lt;Name>OGC:WMS&lt;/Name>
+        &lt;Title>Metacarta WMS VMaplv0&lt;/Title>
+        &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>
+        &lt;ContactInformation>
+        &lt;/ContactInformation>
+      &lt;/Service>
+      
+      &lt;Capability>
+        &lt;Request>
+          &lt;GetCapabilities>
+            &lt;Format>application/vnd.ogc.wms_xml&lt;/Format>
+            &lt;DCPType>
+              &lt;HTTP>
+                &lt;Get>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Get>
+                &lt;Post>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Post>
+              &lt;/HTTP>
+            &lt;/DCPType>
+          &lt;/GetCapabilities>
+          &lt;GetMap>
+            &lt;Format>image/jpeg&lt;/Format>
+            &lt;Format>image/png&lt;/Format>
+            &lt;Format>image/gif&lt;/Format>
+            &lt;Format>image/png; mode=24bit&lt;/Format>
+            &lt;Format>image/wbmp&lt;/Format>
+            &lt;Format>image/tiff&lt;/Format>
+            &lt;Format>image/svg+xml&lt;/Format>
+            &lt;DCPType>
+              &lt;HTTP>
+                &lt;Get>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Get>
+                &lt;Post>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Post>
+              &lt;/HTTP>
+            &lt;/DCPType>
+          &lt;/GetMap>
+          &lt;GetFeatureInfo>
+            &lt;Format>text/plain&lt;/Format>
+            &lt;Format>application/vnd.ogc.gml&lt;/Format>
+            &lt;DCPType>
+              &lt;HTTP>
+                &lt;Get>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Get>
+                &lt;Post>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Post>
+              &lt;/HTTP>
+            &lt;/DCPType>
+          &lt;/GetFeatureInfo>
+          &lt;DescribeLayer>
+            &lt;Format>text/xml&lt;/Format>
+            &lt;DCPType>
+              &lt;HTTP>
+                &lt;Get>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Get>
+                &lt;Post>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Post>
+              &lt;/HTTP>
+            &lt;/DCPType>
+          &lt;/DescribeLayer>
+          &lt;GetLegendGraphic>
+            &lt;Format>image/jpeg&lt;/Format>
+            &lt;Format>image/png&lt;/Format>
+            &lt;Format>image/gif&lt;/Format>
+            &lt;Format>image/png; mode=24bit&lt;/Format>
+            &lt;Format>image/wbmp&lt;/Format>
+            &lt;DCPType>
+              &lt;HTTP>
+                &lt;Get>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Get>
+                &lt;Post>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Post>
+              &lt;/HTTP>
+            &lt;/DCPType>
+          &lt;/GetLegendGraphic>
+          &lt;GetStyles>
+            &lt;Format>text/xml&lt;/Format>
+            &lt;DCPType>
+              &lt;HTTP>
+                &lt;Get>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Get>
+                &lt;Post>&lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:href="http://vmap0.tiles.osgeo.org/wms?"/>&lt;/Post>
+              &lt;/HTTP>
+            &lt;/DCPType>
+          &lt;/GetStyles>
+        &lt;/Request>
+        &lt;Exception>
+          &lt;Format>application/vnd.ogc.se_xml&lt;/Format>
+          &lt;Format>application/vnd.ogc.se_inimage&lt;/Format>
+          &lt;Format>application/vnd.ogc.se_blank&lt;/Format>
+        &lt;/Exception>
+        &lt;VendorSpecificCapabilities />
+        &lt;UserDefinedSymbolization SupportSLD="1" UserLayer="0" UserStyle="1" RemoteWFS="0"/>
+        &lt;Layer>
+          &lt;Name>Vmap0&lt;/Name>
+          &lt;Title>Metacarta WMS VMaplv0&lt;/Title>
+          &lt;SRS>EPSG:4269&lt;/SRS>
+          &lt;SRS>EPSG:4326&lt;/SRS>
+          &lt;SRS>EPSG:900913&lt;/SRS>
+          &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="90" />
+          &lt;Layer>
+            &lt;Name>basic&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._GROUP_TITLE' was missing in this context. -->
+            &lt;Title>basic&lt;/Title>
+            &lt;Abstract>basic&lt;/Abstract>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>ocean&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>ocean&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>ground_01&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>ground_01&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="90" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=ground_01&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="11973.6683623113" max="0" />
+              &lt;!-- WARNING: Only MINSCALEDENOM and no MAXSCALEDENOM specified in the mapfile. A default value of 0 has been returned for the Max ScaleHint but this is probably not what you want. -->
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>ground_02&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>ground_02&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="83.6274" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=ground_02&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="11973.6683623113" />
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>population&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>population&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-179.13" miny="-53.1674" maxx="178.443" maxy="70.9927" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=population&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="5986.83418115564" />
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>river&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>river&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="90" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=river&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="299.341709057782" />
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>stateboundary&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>stateboundary&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-139.053" miny="-49.1398" maxx="178.043" maxy="81.6552" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=stateboundary&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="23947.3367246226" />
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>country_01&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>country_01&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="90" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=country_01&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>country_02&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>country_02&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-55.1943" maxx="180" maxy="72.0051" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=country_02&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>disp&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>disp&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-168.976" miny="3.97549" maxx="80.3432" maxy="68.0063" />
+            &lt;/Layer>
+            &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>inwater&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>inwater&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-179.999" miny="-70.9173" maxx="179.999" maxy="83.576" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=inwater&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="11973.6683623113" />
+            &lt;/Layer>
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>coastline_01&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>coastline_01&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="90" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=coastline_01&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="11973.6683623113" max="0" />
+              &lt;!-- WARNING: Only MINSCALEDENOM and no MAXSCALEDENOM specified in the mapfile. A default value of 0 has been returned for the Max ScaleHint but this is probably not what you want. -->
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>coastline_02&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>coastline_02&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-85.5828" maxx="180" maxy="83.6274" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=coastline_02&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="11973.6683623113" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>depthcontour&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>depthcontour&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-78.1118" maxx="180" maxy="89.9187" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=depthcontour&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="17960.5025434669" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>priroad&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>priroad&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-174.009" miny="-54.7939" maxx="178.564" maxy="70.4843" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=priroad&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>secroad&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>secroad&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-179.999" miny="-54.888" maxx="179.999" maxy="74.7406" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=secroad&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="124.725712107409" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>rail&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>rail&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-165.245" miny="-53.1384" maxx="179.61" maxy="78.168" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=rail&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="124.725712107409" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>ferry&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>ferry&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-126.191" miny="-41.8292" maxx="175.15" maxy="69.6709" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=ferry&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="1197.36683623113" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>tunnel&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>tunnel&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-148.866" miny="-50.3083" maxx="177.891" maxy="67.2178" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=tunnel&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="598.683418115565" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>bridge&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>bridge&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-149.703" miny="-43.5104" maxx="179.452" maxy="69.6586" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=bridge&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="598.683418115565" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>trail&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>trail&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-179.999" miny="-47.1622" maxx="179.999" maxy="77.224" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=trail&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="179.605025434669" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>CAUSE&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>CAUSE&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-96.5515" miny="-32.2882" maxx="127.912" maxy="58.5718" />
+              &lt;Style>
+                &lt;Name>default&lt;/Name>
+                &lt;Title>default&lt;/Title>
+                &lt;LegendURL width="35" height="20">
+                   &lt;Format>image/png&lt;/Format>
+                   &lt;OnlineResource xmlns:xlink="http://www.w3.org/1999/xlink" xlink:type="simple" xlink:href="http://vmap0.tiles.osgeo.org/wms?version=1.1.1&amp;service=WMS&amp;request=GetLegendGraphic&amp;layer=CAUSE&amp;format=image/png"/>
+                &lt;/LegendURL>
+              &lt;/Style>
+              &lt;ScaleHint min="0" max="598.683418115565" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>clabel&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>clabel&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="83.6236" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>statelabel&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>statelabel&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-180" miny="-90" maxx="180" maxy="83.6236" />
+          &lt;/Layer>
+          &lt;Layer queryable="0" opaque="0" cascaded="0">
+              &lt;Name>ctylabel&lt;/Name>
+      &lt;!-- WARNING: Mandatory metadata '..._title' was missing in this context. -->
+              &lt;Title>ctylabel&lt;/Title>
+      &lt;!-- WARNING: Mandatory mapfile parameter '(at least one of) MAP.PROJECTION, LAYER.PROJECTION or wms_srs metadata' was missing in this context. -->
+              &lt;LatLonBoundingBox minx="-165.27" miny="-53.15" maxx="177.13" maxy="78.2" />
+          &lt;/Layer>
+        &lt;/Layer>
+      &lt;/Capability>
+      &lt;/WMT_MS_Capabilities>
+
+    - 2012-04-16 10:59:39.798998
+    - 2012-04-16 10:59:39.798998
+  - - 62
+    - openlayers,wms
+    - Constructor
+    - |
+      http://dev.openlayers.org/docs/files/OpenLayers/Layer/WMS-js.html#OpenLayers.Layer.WMS.Constructor
+      
+      Parameters
+      name	{String} A name for the layer
+      url	{String} Base url for the WMS (e.g.  http://wms.jpl.nasa.gov/wms.cgi)
+      params	{Object} An object with key/value pairs representing the GetMap query string parameters and parameter values.
+      options	{Object} Hashtable of extra options to tag onto the layer.  These options include all properties listed above, plus the ones inherited from superclasses.
+
+    - 2012-04-16 11:02:55.286129
+    - 2012-04-16 11:02:55.286129
+  - - 63
+    - sqlite3
+    - Replace SQL remove "
+    - |
+      sqlite> update products set description = replace(description,'"','');
+
+    - 2012-04-17 13:33:10.142353
+    - 2012-04-17 13:33:10.142353
+  - - 64
+    - DataTable
+    - Set per page to 5
+    - |-
+      $ nano app/assets/javascripts/products.js.coffee
+        ...
+         // Language and options change
+         $(document).ready(function() {
+           $('#product).dataTable( {
+             oLanguage: {
+               sLengthMenu: 'Display &lt;select>'+
+                 '&lt;option value="5">5&lt;/option>'+
+                 '&lt;option value="10">10&lt;/option>'+
+                 '&lt;option value="20">20&lt;/option>'+
+                 '&lt;option value="30">30&lt;/option>'+
+                 '&lt;option value="40">40&lt;/option>'+
+                 '&lt;option value="50">50&lt;/option>'+
+                 '&lt;option value="-1">All&lt;/option>'+
+                 '&lt;/select> records'
+             }
+           } );
+         } )
+    - 2012-04-17 15:08:37.190598
+    - 2012-04-17 15:10:24.414997
+  - - 65
+    - DataTable
+    - Limit Per Page
+    - |-
+      $ nano app/assets/javascripts/products.js.coffee
+        ...
+        $(document).ready( function() {
+        $('#product').dataTable( {
+           iDisplayLength: 5
+        } );
+      } )
+    - 2012-04-17 15:12:10.801574
+    - 2012-04-17 16:45:04.291558
+  - - 66
+    - RAILS
+    - jquery-datatables-rails
+    - |-
+      Gemfile
+      group :assets
+        ...
+        gem 'jquery-datatables-rails'
+      end
+      
+      app/assets/javascripts/application.js
+      ...
+      //= require dataTables/jquery.dataTables
+      
+      app/assets/stylesheets/application.css
+      ...
+       *= require dataTables/jquery.dataTables
+      
+      index views of <resources>
+      app/views/products/index.html.erb
+      <table id='product'>
+      <thead>
+      ...
+      </thead>
+      <tbody>
+      ...
+      </tbody>
+      </table>
+      
+      add jQuery script to call dataTables for <resources>
+      app/assets/javascripts/products.js.coffee
+      ...
+      jQuery ->
+        $('#product').dataTable()
+      
+      Change number of records per page
+      app/assets/javascripts/products.js.coffee
+      
+      jQuery ->
+         $('#product').dataTable
+         sPaginationType: "full_numbers"
+         iDisplayLength: 5
+         oLanguage: {
+           sLengthMenu: 'Display &lt;select>'+
+             '&lt;option value="5">5&lt;/option>'+
+             '&lt;option value="10">10&lt;/option>'+
+             '&lt;option value="20">20&lt;/option>'+
+             '&lt;option value="30">30&lt;/option>'+
+             '&lt;option value="40">40&lt;/option>'+
+             '&lt;option value="50">50&lt;/option>'+
+             '&lt;option value="-1">All&lt;/option>'+
+             '&lt;/select> records'
+           }
+    - 2012-04-17 16:42:14.383378
+    - 2012-04-17 16:53:32.913262
+  - - 67
+    - curl
+    - ERROR --cacert
+    - |-
+      Curl is invoked in .rvm/scripts/fetch, which by default will be in your home directory.
+      
+      Edit this using your favourite text editor: for example,
+      $ nano ~/.rvm/scripts/fetch
+      In lines 56 and 58 (may vary with other versions of RVM, of course) you'll see two lines which begin
+      
+      fetch_command="curl ...
+      
+      Simply add -k after curl, save and try again.
+    - 2012-04-19 03:13:42.600036
+    - 2012-04-19 03:13:42.600036
+  - - 68
+    - Fedora,PostgreSQL
+    - PGDG
+    - |
+      # rpm -ivh http://yum.pgrpms.org/8.4/fedora/fedora-14-i386/postgresql-libs-8.4.6-1PGDG.f14.i686.rpm
+      
+      # rpm -ivh http://yum.pgrpms.org/8.4/fedora/fedora-14-i386/postgresql-8.4.6-1PGDG.f14.i686.rpm
+      
+      # rpm -ivh http://yum.pgrpms.org/8.4/fedora/fedora-14-i386/postgresql-devel-8.4.6-1PGDG.f14.i686.rpm
+      
+      # rpm -ivh http://yum.pgrpms.org/8.4/fedora/fedora-14-i386/postgresql-server-8.4.6-1PGDG.f14.i686.rpm
+
+    - 2012-04-19 04:00:51.364327
+    - 2012-04-19 04:00:51.364327
+  - - 69
+    - Linux.Developer
+    - ""
+    - yum -y install make gcc openssl-devel zlib-devel gcc gcc-c++ make autoconf readline-devel curl-devel expat-devel gettext-devel ncurses-devel sqlite3-devel httpd-devel wget which
+    - 2012-04-19 05:01:44.196695
+    - 2012-04-19 05:01:44.196695
+  - - 70
+    - rvm,yaml
+    - Error install 1.9.3
+    - "Extracting yaml-0.1.4.tar.gz to /home/admin/.rvm/src\r\n\
+      Error running 'tar xmzf /home/admin/.rvm/archives/yaml-0.1.4.tar.gz -C /home/admin/.rvm/src --no-same-owner', please read /home/admin/.rvm/log/ruby-1.9.3-p125/yaml/extract.log\r\n\
+      \r\n\
+      wget http://pyyaml.org/download/libyaml/yaml-0.1.4.tar.gz\r\n\
+      cp yaml-0.1.4.tar.gz /home/luc/.rvm/archives\r\n\
+      rvm install 1.9.3 "
+    - 2012-04-22 12:08:14.372582
+    - 2012-04-22 12:08:14.372582
+  - - 71
+    - ruby,moongodb
+    - Connection problem
+    - |-
+      Ruby Driver: :connect_timeout option causes SystemStackError
+      
+      gem version 1.4.1
+      
+      
+      This works: 
+      
+      {:pool_size =>2, :pool_timeout => 10, :op_timeout=>10}
+      
+      But this:
+      
+       {:pool_size =>2, :pool_timeout => 10, :op_timeout=>10, :connect_timeout=>60} 
+       
+      hangs for a while then raises:
+      
+      /usr/local/lib/ruby/gems/1.9.1/gems/mongo-1.4.1/lib/mongo/connection.rb:731: stack level too deep (SystemStackError)
+    - 2012-04-23 10:03:28.306132
+    - 2012-04-23 10:03:28.306132
+  - - 72
+    - jquery,calendar,TEUY
+    - Full Calendar
+    - |-
+      http://arshaw.com/fullcalendar/
+      
+      Fetching JSON events from a script
+      http://arshaw.com/js/fullcalendar-1.5.3/demos/json.html
+      
+      
+      !!!!!!!!!!!!
+      RAILS 3 + FULL CALENDAR
+      https://github.com/bokmann/rails3_fullcalendar
+      
+      http://lyconic.com/blog/2010/08/03/dry-up-your-ajax-code-with-the-jquery-rest-plugin
+    - 2012-04-24 15:39:48.749874
+    - 2012-04-24 15:52:17.682161
+  - - 73
+    - RAILS,calendar,TEUY
+    - Event Calendar
+    - https://github.com/elevation/event_calendar
+    - 2012-04-24 15:44:30.723811
+    - 2012-04-24 15:44:30.723811
+  - - 74
+    - sqlite3,products
+    - Create sample data
+    - |-
+      $ wget ftp://203.157.20.211/kbase/products.sql
+      
+      $ sqlite3 db/development.sqlite3
+      
+      sqlite> .read products.sql;
+      sqlite> .schema products;
+      sqlite> select * from products;
+    - 2012-04-25 14:49:50.337064
+    - 2012-04-25 14:49:50.337064
+  - - 75
+    - LINUX,sed
+    - Print a specific line
+    - |-
+      $ sed -n '20,21p' file_name
+      
+      Print line 20 anf 21 of file_name
+    - 2012-04-25 15:39:02.720367
+    - 2012-04-25 15:39:02.720367
+  - - 76
+    - mongodb,datatype
+    - Change from integer to string
+    - |
+      > db.provinces.find().forEach(function(x) {
+      ... id = x['_id'];
+      ... code = x['code'].toString();
+      ... db.province.update({_id:id},{$set:{code:code}});
+      ... });
+
+    - 2012-04-26 16:07:32.291909
+    - 2012-04-26 16:07:32.291909
+  - - 77
+    - fullcalendar
+    - drag external-event outside calendar
+    - http://stackoverflow.com/questions/3470154/remove-elements-from-fullcalendar-by-dragging-to-trash-can
+    - 2012-04-29 13:42:25.002562
+    - 2012-04-29 13:42:25.002562
+  - - 78
+    - apache.nginx
+    - compare
+    - http://blog.zhuzhaoyuan.com/2012/02/apache-24-faster-than-nginx/
+    - 2012-04-30 01:07:26.669899
+    - 2012-04-30 01:07:26.669899
+  - - 79
+    - RAILS,timezone
+    - Set default TimeZone
+    - "$ nano app/controllers/application_controller.rb\r\n\
+      \r\n\
+      before_filter :set_timezone \r\n\
+      \r\n\
+      def set_timezone  \r\n  #Time.zone = current_user.time_zone\r\n  Time.znoe = 'Bangkok'\r\n\
+      end  "
+    - 2012-04-30 08:27:36.225298
+    - 2012-04-30 08:27:36.225298
+  - - 80
+    - RAILS,simple_form
+    - Input options
+    - |-
+      <%= simple_form_for(@event) do |f| %>
+          <%= f.input :title %>
+        <%= f.input :starts_at %>
+        <%= f.input :ends_at %>
+        <%= f.input :description,
+                    :as => :text,
+                    :input_html => {:rows => 5, :style => "width:500px;"}
+        %>
+      
+        <%= f.button :submit %>
+      <% end %>
+    - 2012-04-30 08:51:33.501698
+    - 2012-04-30 08:51:33.501698
+  - - 81
+    - RAILS,fullcalendar
+    - jquery.rest.js
+    - |
+      https://github.com/bokmann/rails3_fullcalendar
+      
+      Add res plugin
+      http://lyconic.com/blog/2010/08/03/dry-up-your-ajax-code-with-the-jquery-rest-plugin
+      
+      $ nano app/controllers/application_controller.rb
+      
+      class ApplicationController < ActionController::Base
+        protect_from_forgery
+        
+        before_filter :set_timezone 
+        before_filter :correct_safari_and_ie_accept_headers
+        after_filter :set_xhr_flash
+      
+        def set_timezone  
+          #Time.zone = current_user.time_zone
+          Time.zone = 'Bangkok'
+        end
+        
+        def set_xhr_flash
+          flash.discard if request.xhr?
+        end
+      
+        def correct_safari_and_ie_accept_headers
+          ajax_request_types = ['text/javascript', 'application/json', 'text/xml']
+          request.accepts.sort! { |x, y| ajax_request_types.include?(y.to_s) ? 1 : -1 } if request.xhr?
+        end    
+      end
+      
+      $ nano app/assets/javascripts/application.js
+      
+      //= require jquery
+      //= require jquery_ujs
+      //= require jquery-ui
+      //= require fullcalendar
+      //= require_tree .
+      
+      $.ajaxSetup({
+        beforeSend: function(xhr) {
+          xhr.setRequestHeader("Accept", "text/javascript");
+        }
+      });
+      
+      
+
+    - 2012-04-30 10:49:02.375201
+    - 2012-04-30 10:53:15.794774
+  - - 82
+    - jQuery
+    - drag and drop
+    - http://www.elated.com/articles/drag-and-drop-with-jquery-your-essential-guide/
+    - 2012-05-03 01:44:57.003903
+    - 2012-05-03 01:44:57.003903
+  - - 83
+    - Web Developer
+    - General Recommendation
+    - http://developer.yahoo.com/performance/rules.html
+    - 2012-05-03 02:31:04.022947
+    - 2012-05-03 02:31:04.022947
+  - - 84
+    - Apache 2.x
+    - Enable gzip
+    - |-
+      # nano /etc/httpd/conf/httpd.conf
+      ...
+      AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css text/javascript application/javascript application/x-javascript
+      BrowserMatch ^Mozilla/4 gzip-only-text/html
+      BrowserMatch ^Mozilla/4\.0[678] no-gzip
+      BrowserMatch \bMSIE !no-gzip !gzip-only-text/html
+    - 2012-05-03 02:35:49.170905
+    - 2012-05-03 02:35:49.170905
+  - - 85
+    - LINUX,awk
+    - Find TAB
+    - $ awk '/\t/' file_name
+    - 2012-05-03 16:54:52.800116
+    - 2012-05-03 16:54:52.800116
+  - - 86
+    - Twitter-Bootstrap
+    - Combine with form
+    - |-
+      https://github.com/stouset/twitter_bootstrap_form_for
+      
+      https://github.com/mjbellantoni/formtastic-bootstrap
+    - 2012-05-04 01:08:12.981647
+    - 2012-05-04 01:09:30.087292
+  - - 87
+    - TEUY
+    - ExtJS,Calendar
+    - |-
+      Extensible Calendar API
+      
+      http://ext.ensible.com/deploy/dev/docs/
+    - 2012-05-04 13:27:49.936268
+    - 2012-05-04 13:28:03.522516
+  - - 88
+    - RAILS3,ExtJS
+    - Integrate Rails 3 + Extjs
+    - |-
+      https://github.com/skozlov/netzke-core
+      
+      http://pragma-gamer.blogspot.com/
+      
+      http://stackoverflow.com/questions/182571/the-dangers-of-using-extjs-on-a-big-project-with-ror
+      
+      In order to make ExtJS play nicely with Rails, the following tweaks are needed:
+      http://blog.gugl.org/archives/106
+    - 2012-05-06 06:44:12.284212
+    - 2012-05-06 07:01:20.724799
+  - - 89
+    - VBOX
+    - Change UUID of VDI
+    - "\"c:\\Program Files\\Oracle\\VirtualBox\\VBoxManage.exe\" internalcommands sethduuid FC16-mongo.vdi"
+    - 2012-05-06 08:41:39.259526
+    - 2012-05-06 08:41:39.259526
+  - - 90
+    - LINUX,sed
+    - Add header at top of file
+    - |
+      Template
+      $ sed  -i  '1i <header>' file.tsv
+      
+      Example
+      $ sed -i '1i dispid  prdcat  hospdrgid       drgid   dfscode dfstext packsize        sigcodesigtext  quantity        unitprice       chargeamt       reimbprice      reimbamtprdstcode       refill  claimcont       claimcat        hcode   wday' ditem.tsv
+
+    - 2012-05-09 00:16:22.736739
+    - 2012-05-09 00:16:22.736739
+  - - 91
+    - LINUX,crontab
+    - Format
+    - !binary |
+      bWludXRlICAgICAgICAgICAgICAJMC01OSAgICAgICAgIAnguYDguKfguKXg
+      uLLguYDguJvguYfguJnguJnguLLguJfguLUg4LiI4Liw4Liq4Lix4LmI4LiH
+      4LmD4Lir4LmJ4LiE4Liz4Liq4Lix4LmI4LiH4LiX4Li14LmI4LiB4Liz4Lir
+      4LiZ4LiU4LiX4Liz4LiH4Liy4LiZ4LiX4Lix4LiZ4LiX4Li14LmA4Lih4Li3
+      4LmI4Lit4LiW4Li24LiHIA0KDQpob3VyICAgICAgICAgICAgICAgCTAtMjMg
+      ICAgICAgICAJ4LmA4Lin4Lil4Liy4LmA4Lib4LmH4LiZ4LiK4Lix4LmI4Lin
+      4LmC4Lih4LiHIOC4iOC4sOC4quC4seC5iOC4h+C5g+C4q+C5ieC4hOC4s+C4
+      quC4seC5iOC4h+C4l+C4teC5iOC4geC4s+C4q+C4meC4lOC4l+C4s+C4h+C4
+      suC4meC4l+C4seC4meC4l+C4teC5gOC4oeC4t+C5iOC4reC4luC4tuC4hyAN
+      Cg0KZGF5ICAgICAgICAgICAgICAgCTEtMzEgICAgICAgICAg4LmA4Lin4Lil
+      4Liy4LmA4Lib4LmH4LiZ4Lin4Lix4LiZIOC4iOC4sOC4quC4seC5iOC4h+C5
+      g+C4q+C5ieC4hOC4s+C4quC4seC5iOC4h+C4l+C4teC5iOC4geC4s+C4q+C4
+      meC4lOC4l+C4s+C4h+C4suC4meC4l+C4seC4meC4l+C4teC5gOC4oeC4t+C5
+      iOC4reC4luC4tuC4hyANCg0KbW9udGggICAgICAgICAgICAgIAkxLTEyICAg
+      ICAgICAgCeC5gOC4p+C4peC4suC5gOC4m+C5h+C4meC5gOC4lOC4t+C4reC4
+      mSDguIjguLDguKrguLHguYjguIfguYPguKvguYnguITguLPguKrguLHguYjg
+      uIfguJfguLXguYjguIHguLPguKvguJnguJTguJfguLPguIfguLLguJnguJfg
+      uLHguJnguJfguLXguYDguKHguLfguYjguK3guJbguLbguIcgDQoNCndlZWtk
+      YXkgICAgICAgICAJMC02ICAgICAgICAJ4Lin4Lix4LiZ4LiC4Lit4LiH4LmB
+      4LiV4LmI4Lil4Liw4Liq4Lix4Lib4LiU4Liy4Lir4LmMIOC4oeC4teC4hOC5
+      iOC4suC4lOC4seC4h+C4meC4teC5iSAo4Lit4Liy4LiX4Li04LiV4Lii4LmM
+      ID0gMCwg4LiI4Lix4LiZ4LiX4Lij4LmMID0gMSwg4Lit4Lix4LiH4LiE4Liy
+      4LijID0gMiwg4Lie4Li44LiYID0gMywg4Lie4Lik4Lir4Lix4LiqID0gNCwg
+      4Lio4Li44LiB4Lij4LmMID0gNSDguYHguKXguLAg4LmA4Liq4Liy4Lij4LmM
+      ID0gNikgDQoNCmNvbW1hbmQgICAgICAJ4LiE4Liz4Liq4Lix4LmI4LiHICAg
+      ICAgICAgIOC5gOC4o+C4suC4quC4suC4oeC4suC4o+C4luC4geC4s+C4q+C4
+      meC4lOC4hOC4s+C4quC4seC5iOC4h+C5hOC4lOC5ieC4oeC4suC4geC4oeC4
+      suC4oiDguKPguKfguKHguJfguLHguYnguIcgc2NyaXB0IOC4leC5iOC4suC4
+      h+C5hiDguJXguLLguKHguJfguLXguYjguYDguKPguLLguJXguYnguK3guIfg
+      uIHguLLguKMgIA==
+
+    - 2012-05-09 15:42:48.592009
+    - 2012-05-09 15:42:48.592009
+  - - 92
+    - Outlook .eml
+    - Export to .mbox using ruby
+    - |-
+      http://www.broobles.com/eml2mbox/
+      
+      Download eml2mbox.rb to D:\> "INBOX 2005"
+      
+      D:\> cd "INBOX 2005"
+      D:\INBOX 2005\> eml2mbox.rb
+    - 2012-05-13 03:42:18.469891
+    - 2012-05-13 03:48:10.767620
+  - - 93
+    - RUBY,mbox
+    - Read .mbox
+    - |-
+      #!/usr/bin/env ruby -w
+      #
+      # this will only work in 1.8.7, since mailread.rb is not present after that
+      # supply the path of any mbox file such as ~/mbox or ~/mail/read-mail
+      # and see a listing of mails, then give a msg number and see body
+      require 'mailread'
+      
+      BOLD       = "\e[1m"
+      CLEAR      = "\e[0m"
+      
+      MAILBOX = ARGV[0] ||  "mbox"
+      mbox = File.open(MAILBOX)
+      count = lines = 0
+      # array of mails
+      mails = []
+      # read up the warning message, we don't want it in our array
+      msg = Mail.new(mbox)
+      while !mbox.eof?
+        msg = Mail.new(mbox)
+        count += 1
+        m = msg.header
+        printf("%2d : %2s [%15s] %s\n", count,  m['Status'], m['From'], msg.header['Subject'])
+        mails << msg
+      end
+      mbox.close
+      #puts mails.size
+      
+      # ask user for a number and print body for that
+      while true
+        print "Enter a mail number [1 to #{mails.size}]:"
+        n = STDIN.gets.chomp
+        break if n.nil? || n.empty? 
+        msg = mails[n.to_i-1]
+        body = msg.body
+        puts
+        string= "#{msg.header['Subject']}"
+        puts "#{BOLD}#{string}#{CLEAR}"
+        puts "-" * string.length
+        puts body
+      end
+    - 2012-05-13 03:48:57.387393
+    - 2012-05-13 03:48:57.387393
+  - - 94
+    - NGINX
+    - Timeout 10 minutes
+    - "\r\n\
+      \t\r\n\
+      Hongli Lai  \t\r\n\
+      View profile  \r\n More options Apr 25 2009, 2:37 am\r\n\
+      On Fri, Apr 24, 2009 at 8:09 PM, Joe Williams <j...@joetify.com> wrote: \r\n\
+      > I am getting 504 gateway timeouts for a long running page using nginx \r\n\
+      > and passenger. To fix this using mongrel I used the following but it \r\n\
+      > doesn't seem to work with passenger. \r\n\
+      > send_timeout 300; \r\n\
+      > proxy_read_timeout 300; \r\n\
+      > What timeout controls this in passenger? \r\n\
+      \r\n\
+      \r\n\
+      At this time the timeout is hardcoded. You can change it in \r\n\
+      ext/nginx/Configuration.c: \r\n       ngx_conf_merge_msec_value(conf->upstream.send_timeout, \r\n                              prev->upstream.send_timeout, 60000); \r\n      ngx_conf_merge_msec_value(conf->upstream.read_timeout, \r\n                              prev->upstream.read_timeout, 60000); \r\n\
+      \r\n\
+      You need to recompile and reinstall Nginx as well. Run \r\n\
+      ./bin/passenger-install-nginx-module. "
+    - 2012-05-16 12:15:47.234999
+    - 2012-05-16 12:15:47.234999
+  - - 95
+    - EXTJS,highstock
+    - Highstock extension for ExtJs 4
+    - http://joekuan.wordpress.com/2012/02/22/highstock-extension-for-extjs-4/
+    - 2012-05-16 15:43:14.008321
+    - 2012-05-16 15:43:14.008321
+  - - 96
+    - GEM
+    - Lost gem
+    - http://stackoverflow.com/questions/3214658/deploying-a-rails-app-on-dreamhost-issue
+    - 2012-05-17 04:30:26.707890
+    - 2012-05-17 04:30:26.707890
+  - - 97
+    - LINUX,crotab
+    - Example
+    - |
+      PATH=/bin:/sbin:/usr/bin:/usr/sbin:/home/admin:/mongodb/bin
+      MAIL="admin"
+      
+      * * * * * check-mongo
+      * 10-11 * * 1-5 get-quote
+      0-30 12,16 * * 1-5 get-quote
+      30-59 14 * * 1-5 get-quote
+      * 15 * * 1-5 get-quote
+      45 16 * * 1-5 get-quote
+      50 16 * * 1-5 stop-mongo
+
+    - 2012-05-19 02:01:11.792241
+    - 2012-05-19 02:01:11.792241
+  - - 98
+    - EXTJS 4
+    - Designer
+    - http://www.sencha.com/learn/ext-designer-1-2-beta-overview/
+    - 2012-05-20 09:38:50.260489
+    - 2012-05-20 09:38:50.260489
+  - - 99
+    - EXTJS 4, RAILS 3.1
+    - Putting ExtJS 4 into Rails 3.1's asset pipeline
+    - http://snk.tuxfamily.org/log/extjs4-mvc-rails31-asset-pipeline.html
+    - 2012-05-21 02:00:57.296720
+    - 2012-05-21 02:02:11.358894
+  - - 100
+    - RAILS,monrel
+    - 1.9.3
+    - "Fixed Error\r\n\
+      http11.c: In function \xE2\x80\x98http_field\xE2\x80\x99:\r\n\
+      http11.c:77:34: error: \xE2\x80\x98struct RString\xE2\x80\x99 has no member named \xE2\x80\x98ptr\xE2\x80\x99\r\n\
+      http11.c:77:74: error: \xE2\x80\x98struct RString\xE2\x80\x99 has no member named \xE2\x80\x98len\xE2\x80\x99\r\n\
+      \r\n\
+      Gemfile\r\n\
+      .....\r\n\
+      gem 'mongrel', '>= 1.2.0.pre2'\r\n\
+      \r\n\
+      $ bundle\r\n\
+      $ rails s mongrel"
+    - 2012-06-03 20:21:14.116725
+    - 2012-06-03 20:23:25.163950
+  - - 101
+    - EXTJS4
+    - General guidelines
+    - |-
+      PART 1
+      http://www.sencha.com/learn/architecting-your-app-in-ext-js-4-part-1
+      PART 2
+      http://www.sencha.com/learn/architecting-your-app-in-ext-js-4-part-1
+    - 2012-06-03 21:04:13.031311
+    - 2012-06-03 21:05:29.245424
+  - - 102
+    - ST2
+    - Sublime Text 2 CRACKED
+    - |-
+      Google Search for [SetupSublime.exe]
+      
+      The trick with ST2 is to learn the command palette... Ctrl-Shift-P (Win) will open it. From there you can start typing any of the menu commands (and hidden commands) that are available. I came from a background of heavy Notepad++ use as well and after using ST2 for awhile now, key binds and the command palette are where the magic is. 
+      
+      For example, when I want to start writing a new CSS file: Ctrl-N (duh), Ctrl-Shift-P, CSS, Enter. This runs the "Set Syntax: CSS" command. It sounds easier to click on a menu, or toolbar button, but once you get used to this its so much faster.
+      
+      Also, if you haven't already, open up the key binds file and peruse through it - try to use as many as you can so you see what they do. It helped me a ton.  
+      
+      But to answer your question, I don't think there's a toolbar at all. I believe ST1 had one, but it appears to have been ditched along the way.
+      
+      Michael Hartl ST2 tutorial
+      https://github.com/mhartl/rails_tutorial_sublime_text
+    - 2012-06-04 05:14:15.800620
+    - 2012-06-04 06:02:58.898172
+  - - 103
+    - RAILS 3.2
+    - API Doc
+    - |-
+      http://api.rubyonrails.org/
+      
+      With guidelines
+      
+      https://github.com/mhartl/rails_tutorial_sublime_text
+    - 2012-06-04 05:18:33.674085
+    - 2012-06-04 05:18:33.674085
+  - - 104
+    - ST2
+    - Tab Size
+    - |-
+      Try saving this as Packages/User/Preferences.sublime-settings
+      
+      {
+          "tab_size": 2,
+          "translate_tabs_to_spaces": true
+      }
+    - 2012-06-04 06:12:47.287992
+    - 2012-06-04 06:12:47.287992
+  - - 105
+    - ST2
+    - Disable Update Check
+    - |-
+      You can add this entry in your /etc/hosts file:
+      
+      127.0.0.1       www.sublimetext.com
+    - 2012-06-04 06:16:03.745027
+    - 2012-06-04 06:16:03.745027
+  - - 106
+    - Netzke
+    - Rails + ExtJS
+    - |-
+      http://writelesscode.com/blog/2010/06/14/extjs-rails-crud-application-in-7-minutes/
+      
+      http://stackoverflow.com/questions/10738287/netzke-extjs-4-rails-grid-not-visible
+      
+      http://socrateos.blogspot.com/2011/04/first-time-with-netzke-extjs-rails.html
+      
+      http://mayavini.wordpress.com/2012/04/16/extjs-plugin/
+    - 2012-06-10 09:10:29.093168
+    - 2012-06-10 09:27:24.808612
+  - - 107
+    - EXTJS
+    - Perfoemance Guidelines
+    - http://www.sencha.com/blog/ext-js-4-1-performance?mkt_tok=3RkMMJWWfF9wsRoku6XLZKXonjHpfsX/4%2BQvWq6zlMI/0ER3fOvrPUfGjI4ETMB0dvycMRAVFZl5nR9dFOOdfQ%3D%3D
+    - 2012-06-22 01:33:49.620538
+    - 2012-06-22 01:33:49.620538
+  - - 108
+    - RUBY
+    - array insert member
+    - |
+      [~/drugcs]$ irb
+      irb(main):001:0> a = [1,2,4,5]
+      => [1, 2, 4, 5]
+      irb(main):002:0> a.insert(2,3)
+      => [1, 2, 3, 4, 5]
+
+    - 2012-06-23 03:54:08.148401
+    - 2012-06-23 03:54:08.148401
+  - - 109
+    - RUBY 1.9.3
+    - ASCII-US invalid multibyte
+    - |-
+      # -*- encoding : utf-8 -*-
+      
+      http://blog.grayproductions.net/articles/ruby_19s_three_default_encodings
+    - 2012-06-23 11:10:12.579509
+    - 2012-06-23 11:20:27.654728
+  - - 110
+    - jQuery
+    - wysiwyg editor
+    - https://github.com/akzhan/jwysiwyg
+    - 2012-06-25 03:46:48.609462
+    - 2012-06-25 03:46:48.609462
+  - - 111
+    - EXTJS
+    - Theme Downloads
+    - |-
+      http://alnewkirk.github.com/Extjs-Themes-Backup/
+      
+      http://www.extjs.org.cn/files/xtheme-xxx.zip
+    - 2012-06-25 12:01:56.930448
+    - 2012-06-25 16:24:22.234580
+  - - 112
+    - FOSS4G
+    - Presentation
+    - |-
+      http://2009.foss4g.org/presentations/
+      
+      MapTiler
+      http://blip.tv/fosslc/maptiler-by-petr-pridal-2815844
+    - 2012-06-27 02:15:12.267952
+    - 2012-06-27 02:20:18.748460
+  - - 113
+    - GIS
+    - Quick Start
+    - http://live.osgeo.org/en/overview/overview.html
+    - 2012-06-27 03:18:27.974049
+    - 2012-06-27 03:18:27.974049
+  - - 114
+    - OSS Policies
+    - Open Source Software
+    - http://csis.org/files/publication/100416_Open_Source_Policies.pdf
+    - 2012-07-06 14:49:08.065709
+    - 2012-07-06 14:49:27.379431
+  - - 115
+    - GeoExt
+    - Uncaught TypeError Tip
+    - |-
+      Description 
+      
+      http://api.geoext.org/1.0/examples/permalink.html
+      
+      Ext.slider is undefined
+      
+      Because this example uses extjs 3.0.0, switching to the 3.2.1 version fix the bug.
+      
+      Download: http://code.google.com/p/instant-backoffice/downloads/detail?name=ext-3.2.1.zip&can=2&q=
+    - 2012-07-07 02:17:49.350612
+    - 2012-07-07 02:20:18.874306
+
+--- 
+users: 
+  columns: 
+  - id
+  - email
+  - role
+  - password_digest
+  records: 
+  - - 1
+    - titasak@gmail.com
+    - admin
+    - $2a$10$R1BG16GP2fme5a5CEjnXm.0lZygqB9ycyDYHbw7ZGJAsfdap79UlW
+  - - 2
+    - kun_a44@hotmail.com
+    - admin
+    - $2a$10$rvfbbF40PGF7zYgEFRIOKOaE1QqjmRfiytTDLtVOI27ah4.ugKJyu
+  - - 3
+    - praprai@hisro.or.th
+    - member
+    - $2a$10$S1SN7qZ1024UlVYJVGHD7Ob1IaqG7wn8v8RVtzaYJApxnaGXDivpy
+  - - 4
+    - pboonthaigm@gmail.com
+    - member
+    - $2a$10$cYaq4itqVYftGX3ja5pRFOF2yQP/QxvjLeHChPWTNnEg/J8JP6Rja
+  - - 5
+    - manisa@hisro.or.th
+    - member
+    - $2a$10$02dkrawzC4jpE/2r/VJAVOYix.rYyHQTWgwt/m5lVfKy97z7mQIdy
+  - - 6
+    - shotirose.p@hotmail.com
+    - member
+    - $2a$10$MEl3k5hUs0Fm5mC6ZVK8Su2j1z8mLGOKmH.GzHHqyvXKzSo1qQg4m
+  - - 7
+    - than_on@hotmail.com
+    - member
+    - $2a$10$yWVRcHDDMku4iWcxlgc9qOuiDFHiFk0JqTJ1XfmVETJPd9FldGIcO
